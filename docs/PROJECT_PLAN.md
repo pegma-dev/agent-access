@@ -4,10 +4,10 @@ AUTH-01 is the scoped-credential prerequisite inserted before KB-04 in the
 [Knowledge/AI plan](https://github.com/pegma-dev/support-desk/blob/main/docs/KNOWLEDGE_AI_PLAN.md).
 This repository owns reusable authorization-server source; Knowledge Base
 continues to own content and resource operations. The first source package is
-`@pegma/agent-access@0.1.0`, unpublished. AUTH-01 source and the subsequent
-release preparation are merged. All five new packages, the four Knowledge
-Base packages and Agent Access, remain unpublished at source version `0.1.0`;
-no host is activated by this work.
+`@pegma/agent-access@0.1.0`. AUTH-01 source and the subsequent release
+preparation are merged. As of 2026-11-07, all five new packages, the four
+Knowledge Base packages and Agent Access, remain unpublished at source version
+`0.1.0`; no host is activated by this work.
 
 ## Accepted first scope
 
@@ -26,26 +26,35 @@ no host is activated by this work.
 
 ## Delivery and evidence
 
-| Gate                                  | Evidence and current state                                                                                                                                                                                                                                                                                                   |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| AUTH-01 source and official SDK proof | Merged in [Agent Access #1](https://github.com/pegma-dev/agent-access/pull/1) at `a444e2113db98455b638b2ef8aa7c2faccb16b62`. The original 123 runtime tests and synthetic SDK proof are historical source evidence.                                                                                                          |
-| Agent Access release preparation      | Merged in [Agent Access #2](https://github.com/pegma-dev/agent-access/pull/2) at `eddddd5e333ce16b6a4a8233b84656b3ac784947`. Each Node 22/24 lane passed 123 runtime tests plus 136 release regressions (259 total), with zero skips, the synthetic example, and packed public API/type checks.                              |
-| KB-04 transport source exit           | Merged in [Knowledge Base #5](https://github.com/pegma-dev/knowledge-base/pull/5) at `b61fc77aedd22e888ac7292c3597f93e54fcda8e`. Source evidence includes 372 runtime tests and official SDK proof of all five initial tools; it does not close host acceptance.                                                             |
-| KB-05 release preparation             | Merged in [Knowledge Base #6](https://github.com/pegma-dev/knowledge-base/pull/6) at `7f5eee68be692b5489de3965f3f5ede7ef7a812d`. Each Node 22/24 lane passed 372 runtime tests plus 128 release regressions (500 total), with zero skips, five-package artifact proof, and clean review. Actual publication remains pending. |
-| First-publication bootstrap           | Pending for all five packages. Maintainer 2FA publication creates each package name under an unadvertised `bootstrap` tag; it supplies no trusted provenance.                                                                                                                                                                |
-| First advertised publication          | Pending. npm ownership, a protected publish environment, approved signers, immutable tags, and npm trusted-publisher/direct-publish configuration; a separately reviewed first advertised version; and exact own-package registry/provenance verification remain required.                                                   |
-| SD-02 AI coordinator                  | Pending; requires published Knowledge Base dependencies.                                                                                                                                                                                                                                                                     |
-| Retained host acceptance              | Pending. PG-01/RG-01 require published Agent Access and Knowledge Base dependencies, real existing-login/current-Admin consent, and actual per-client protected API/MCP, credential-failure, and exact-revision evidence-attestation proof on both hosts before activation/A-01/pilots.                                      |
+As of 2026-11-07, all five new packages, the four Knowledge Base packages and
+Agent Access, remain unpublished at source version `0.1.0`. This is the
+canonical merged-source evidence snapshot. CI totals are historical results
+for the linked reviewed source heads, distinct from the recorded squash merge
+commits. They are not fixed test-count requirements or publication guards;
+every future release needs its own current-head review, validation, and exact
+registry preflight in [release operations](RELEASING.md).
 
-Agent Access #2's round-3 OpenRouter
-[code review](https://github.com/pegma-dev/agent-access/pull/2#pullrequestreview-5814178148)
-and [security review](https://github.com/pegma-dev/agent-access/pull/2#issuecomment-6711125916)
-were clean with zero open findings. Knowledge Base #6 likewise has clean
-round-3 OpenRouter
-[code review](https://github.com/pegma-dev/knowledge-base/pull/6#pullrequestreview-5814111477)
-and [security review](https://github.com/pegma-dev/knowledge-base/pull/6#issuecomment-6710997171).
-Copilot posted no actual review during the bounded wait; its absence is not a
-passing review result.
+| Gate                                  | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                     | Current state                                                                                                                                                                                                                |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AUTH-01 source and official SDK proof | Reviewed head [1ba5286](https://github.com/pegma-dev/agent-access/commit/1ba52860e80bc3ec6692f9dd112dd02f0616aebd); [primary Node 22/24 CI](https://github.com/pegma-dev/agent-access/actions/runs/42382637167). Original 123 runtime tests and official SDK proof.                                                                                                                                                                          | Merged via [Agent Access #1](https://github.com/pegma-dev/agent-access/pull/1) as [a444e21](https://github.com/pegma-dev/agent-access/commit/a444e2113db98455b638b2ef8aa7c2faccb16b62); historical source evidence.          |
+| Agent Access release preparation      | Reviewed head [165e56a](https://github.com/pegma-dev/agent-access/commit/165e56ab19e9860d6c0bd17f419052b751394b9c); [primary Node 22/24 CI](https://github.com/pegma-dev/agent-access/actions/runs/42399414623). Each lane passed 123 runtime tests plus 136 release regressions (259 per lane), with zero skips, the synthetic example, and packed public API/type checks.                                                                  | Merged via [Agent Access #2](https://github.com/pegma-dev/agent-access/pull/2) as [eddddd5](https://github.com/pegma-dev/agent-access/commit/eddddd5e333ce16b6a4a8233b84656b3ac784947); publication pending.                 |
+| KB-04 transport source exit           | Reviewed head [c897626](https://github.com/pegma-dev/knowledge-base/commit/c897626de6c7b2ea574f4154b0bc7a7731ee106e); [primary Node 22/24 CI](https://github.com/pegma-dev/knowledge-base/actions/runs/42390433045). 372 runtime tests and official SDK proof of all five initial tools.                                                                                                                                                     | Merged via [Knowledge Base #5](https://github.com/pegma-dev/knowledge-base/pull/5) as [b61fc77](https://github.com/pegma-dev/knowledge-base/commit/b61fc77aedd22e888ac7292c3597f93e54fcda8e); retained host acceptance open. |
+| KB-05 release preparation             | Reviewed head [c8ef14a](https://github.com/pegma-dev/knowledge-base/commit/c8ef14af0ec32e3903b9399543b7a9f2e48df2f9); [primary Node 22/24 CI](https://github.com/pegma-dev/knowledge-base/actions/runs/42398508042). Each lane passed 372 runtime tests plus 128 release regressions (500 per lane), with zero skips. Packaging checks cover four KB packages; the packed protocol proof uses all five packages (four KB plus Agent Access). | Merged via [Knowledge Base #6](https://github.com/pegma-dev/knowledge-base/pull/6) as [7f5eee6](https://github.com/pegma-dev/knowledge-base/commit/7f5eee68be692b5489de3965f3f5ede7ef7a812d); publication pending.           |
+| First-publication bootstrap           | Maintainer 2FA publication creates the four Knowledge Base package names and Agent Access under an unadvertised `bootstrap` tag; it supplies no trusted provenance.                                                                                                                                                                                                                                                                          | Pending for all five packages.                                                                                                                                                                                               |
+| First advertised publication          | npm ownership, a protected publish environment, approved signers, immutable tags, npm trusted-publisher/direct-publish configuration, a separately reviewed first advertised version, and exact own-package registry/provenance verification.                                                                                                                                                                                                | Pending for all five packages.                                                                                                                                                                                               |
+| SD-02 AI coordinator                  | Requires published Knowledge Base dependencies.                                                                                                                                                                                                                                                                                                                                                                                              | Pending.                                                                                                                                                                                                                     |
+| Retained host acceptance              | PG-01/RG-01 require published Agent Access and Knowledge Base dependencies, real existing-login/current-Admin consent, and actual per-client protected API/MCP, credential-failure, and exact-revision evidence-attestation proof on both hosts.                                                                                                                                                                                             | Pending; required before activation/A-01/pilots.                                                                                                                                                                             |
+
+At the Agent Access #2 reviewed head, round-3
+[OpenRouter code review](https://github.com/pegma-dev/agent-access/pull/2#pullrequestreview-5814178148)
+and the [security receipt](https://github.com/pegma-dev/agent-access/pull/2#issuecomment-6711125916)
+were clean with zero open findings. Knowledge Base #6 likewise had clean
+round-3 [OpenRouter code review](https://github.com/pegma-dev/knowledge-base/pull/6#pullrequestreview-5814111477)
+and a [security receipt](https://github.com/pegma-dev/knowledge-base/pull/6#issuecomment-6710997171)
+at its reviewed head. Agent Access #2's
+[2026-11-07 bounded-wait receipt](https://github.com/pegma-dev/agent-access/pull/2#issuecomment-6711152931)
+records that no actual Copilot review or work-start event arrived during that
+source PR's wait; the absence is not a completed review.
 
 Source units and synthetic protocol proof may land before publication. A
 test-only clean consumer can install the reviewed local tarball to prove its

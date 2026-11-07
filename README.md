@@ -18,18 +18,14 @@ reading, draft writing, and test-evidence submission. Future capabilities
 require explicit registration and fresh consent; changing the registry cannot
 silently widen an existing grant.
 
-The source package is `@pegma/agent-access@0.1.0`, currently unpublished.
-AUTH-01 source and official SDK proof merged in
-[Agent Access #1](https://github.com/pegma-dev/agent-access/pull/1); release
-preparation merged separately in
-[Agent Access #2](https://github.com/pegma-dev/agent-access/pull/2). Each Node
-22/24 lane passed 123 runtime tests and 136 release regressions with zero skips,
-plus the synthetic example and packed public API/type checks. The governing
-[Knowledge/AI plan](https://github.com/pegma-dev/support-desk/blob/main/docs/KNOWLEDGE_AI_PLAN.md)
-tracks the remaining work. All four Knowledge Base packages and Agent Access
-remain unpublished at source version `0.1.0`. Source tests and a synthetic
-client example do not establish real host login, two-host client acceptance,
-publication, or deployment.
+As of 2026-11-07, all five new packages, the four Knowledge Base packages and
+`@pegma/agent-access`, remain unpublished at source version `0.1.0`. AUTH-01
+source, official SDK proof, and the separate release preparation are merged;
+the [dated source evidence](docs/PROJECT_PLAN.md#delivery-and-evidence) records
+the reviewed heads, squash merges, primary CI, and historical per-lane results.
+The governing [Knowledge/AI plan](https://github.com/pegma-dev/support-desk/blob/main/docs/KNOWLEDGE_AI_PLAN.md)
+tracks the remaining work. Source tests and a synthetic client example do not
+establish real host login, two-host client acceptance, publication, or deployment.
 Initial compatibility targets are Codex, Claude Code, Grok Bot, and T3 Code.
 Grok Bot is the desktop application with its hosted agent; T3 Code initially
 targets Codex-provider mode. Their compatibility remains unproven until actual
