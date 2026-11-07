@@ -68,6 +68,14 @@ configuration. Lightweight tags and unmerged commits fail the gate.
 After the full gate, prepare from that exact clean checkout. This example uses
 the current source version; substitute the full approved commit SHA:
 
+Strict `prepare` requires both `RELEASE_NPM_CLI` and
+`RELEASE_NPM_VERSION=11.18.0`. The CLI path must be canonical, absolute, and name
+a regular `npm-cli.js` file; linked paths are rejected. Extract the reviewed npm
+tarball after checking the SHA-256 pinned in the
+[npm setup action](../.github/actions/setup-release-npm/action.yml), then set
+both variables before standalone preparation. The workflow configures them
+automatically. Development `check` and `pack` continue to use ambient npm.
+
 ```sh
 node scripts/release-packages.mjs prepare --tag v0.1.0 --expected-commit FULL_COMMIT_SHA
 ```
@@ -126,8 +134,9 @@ These external settings remain pending maintainer operations:
   token fallback exists.
 
 The workflow uses Node `24.18.0` and npm `11.18.0` for release operations. It
-downloads npm's tarball and checks the committed SHA-256 before extracting the
-CLI, rather than installing a floating npm release. Review the
+uses the local [npm setup action](../.github/actions/setup-release-npm/action.yml)
+to download npm's tarball and check the committed SHA-256 before extracting the
+CLI. Review the
 [official npm trusted-publisher guidance](https://docs.npmjs.com/trusted-publishers/)
 when configuring direct publishing and first-use timing; source validation does
 not configure or prove those external settings.
@@ -154,8 +163,10 @@ node scripts/release-packages.mjs publish --prepared-dir PREPARED_DIRECTORY --ma
 
 The workflow supplies `RELEASE_NPM_CLI` as an absolute path to the reviewed npm
 `11.18.0` `npm-cli.js` and `RELEASE_NPM_VERSION=11.18.0`. Standalone `prepare`
-and `verify` also need this reviewed CLI path; use the npm artifact and SHA-256
-pinned in the workflow. Read-only `preflight` needs no npm authentication. `publish`
+and `verify` also need both variables and the canonical regular CLI path; use
+the npm artifact and SHA-256 pinned in the
+[npm setup action](../.github/actions/setup-release-npm/action.yml).
+Read-only `preflight` needs no npm authentication. `publish`
 requires the matching GitHub release OIDC environment; interactive bootstrap is
 a separate maintainer procedure. npm runs with isolated configuration and the
 explicit public registry. `publish` rejects ambient npm authentication and
@@ -190,6 +201,40 @@ verification results in the release record.
 Manual first publication cannot satisfy trusted provenance. The
 [bootstrap handoff](BOOTSTRAP.md) specifies the two separate release steps;
 bootstrap integrity evidence must never be reported as OIDC provenance.
+
+## Observed npm audit shape: 2026-11-07
+
+A real isolated registry consumer used the installed npm `11.18.0` CLI and exact
+`@pegma/spine@0.1.2`, with its known integrity checked and lifecycle scripts
+disabled. No package runtime was imported. The command
+`npm audit signatures --json --include-attestations` succeeded; the
+[official npm audit documentation](https://docs.npmjs.com/cli/v11/commands/npm-audit/#audit-signatures)
+documents that flag and its attestation output.
+
+The sanitized observed shape was:
+
+```text
+top-level keys: invalid, missing, verified
+counts: invalid=0, missing=0, verified=1
+verified entry keys: attestationBundles, attestations, location, name, registry, version
+attestationBundles: 2 bundles, including one SLSA v1 provenance bundle
+bundle keys: dsseEnvelope, mediaType, verificationMaterial
+verificationMaterial: certificate.rawBytes, timestampVerificationData, tlogEntries
+```
+
+A second isolated run installed all seven exact external runtime pins used by
+the two components, resolving 102 packages. Root lock versions and public
+registry URLs matched; the real audit reported `invalid=0`, `missing=0`,
+and `verified=21`. Lifecycle scripts and runtime imports remained disabled.
+This checks the existing external dependency graph without publishing either
+new component.
+
+The observed public source was [pegma-dev/spine](https://github.com/pegma-dev/spine)
+at `refs/tags/v0.1.2`. This records the pinned CLI's working flag, output, and
+certificate shape. It proves no provenance for unpublished KB or Agent Access
+packages and performs no publisher operation. Their own exact repository,
+workflow, tag, and source-commit post-release verification remains mandatory.
+Raw bundles and certificate bytes are intentionally omitted.
 
 ## Consumers and retained host gates
 

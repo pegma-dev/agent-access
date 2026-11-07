@@ -63,30 +63,41 @@ async function exists(path) {
   }
 }
 
+export async function resolveReleaseNpmCli(env = process.env) {
+  const candidate = env.RELEASE_NPM_CLI;
+  assert.ok(
+    typeof candidate === "string" &&
+      isAbsolute(candidate) &&
+      basename(candidate) === "npm-cli.js",
+    "The reviewed release npm CLI must be an explicit absolute npm-cli.js path.",
+  );
+  assert.equal(
+    env.RELEASE_NPM_VERSION,
+    "11.18.0",
+    "Release preparation requires the reviewed npm version.",
+  );
+  const path = resolve(candidate);
+  const metadata = await lstat(path);
+  assert.ok(
+    metadata.isFile() && !metadata.isSymbolicLink(),
+    "The release npm CLI must be a regular file.",
+  );
+  const canonical = await realpath(path);
+  assert.equal(
+    canonical,
+    path,
+    "The release npm CLI must use its canonical path.",
+  );
+  return canonical;
+}
+
 async function npmCliPath(preparedRelease = false) {
   if (preparedRelease) {
-    const candidate = process.env.RELEASE_NPM_CLI;
-    assert.ok(
-      typeof candidate === "string" &&
-        isAbsolute(candidate) &&
-        basename(candidate) === "npm-cli.js" &&
-        (await exists(candidate)),
-      "The reviewed release npm CLI must be an absolute npm-cli.js path.",
-    );
-    assert.equal(
-      process.env.RELEASE_NPM_VERSION,
-      "11.18.0",
-      "Release preparation requires the reviewed npm version.",
-    );
+    const candidate = await resolveReleaseNpmCli();
     const [major, minor] = process.versions.node.split(".").map(Number);
     assert.ok(
       major > 22 || (major === 22 && minor >= 14),
       "Release preparation requires Node 22.14 or newer.",
-    );
-    const metadata = await lstat(candidate);
-    assert.ok(
-      metadata.isFile() && !metadata.isSymbolicLink(),
-      "The release npm CLI must be a regular file.",
     );
     const versionEnvironment = {};
     for (const [key, value] of Object.entries(process.env)) {
