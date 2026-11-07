@@ -2,19 +2,28 @@
 
 ## Status and release boundary
 
-The release contains only `@pegma/agent-access`, at source version `0.1.0` and
-currently unpublished. AUTH-01's earlier merged source result recorded 123
-tests. That historical result and its synthetic SDK proof do not validate this
-release-preparation follow-up. Changed source still needs every current-head
-review and Node 22/24 gate. No source merge configures a publisher, creates a
-tag or release, or publishes npm packages. Follow the
-[maintainer bootstrap handoff](BOOTSTRAP.md) for first use.
+This repository releases only `@pegma/agent-access`. As of 2026-11-07, all five
+new packages, the four Knowledge Base packages and Agent Access, remain
+unpublished at source version `0.1.0`. The canonical
+[dated source evidence](PROJECT_PLAN.md#delivery-and-evidence) records the
+reviewed source heads, separate squash merge commits, exact primary CI runs,
+historical per-lane results, and review receipts. Those observations do not
+replace any current-head review, validation, or release preflight below.
 
-Knowledge Base has its own release process. Production host assembly requires
-exact published dependencies from both components. Source tests, local adapter
-conformance, and the official SDK protocol fixture establish source behavior;
-they do not establish real host login, production storage, or actual requested
-client acceptance on either host.
+Maintainer 2FA bootstrap under an unadvertised `bootstrap` tag, external
+release protection and publisher configuration, a separately reviewed first
+advertised version, and exact own-package registry/provenance verification
+remain pending. No source work
+authorizes tags, GitHub releases, npm publication, external configuration, or
+deployment. Follow the [maintainer bootstrap handoff](BOOTSTRAP.md) for first
+use; no future version is chosen here.
+
+Knowledge Base retains its own release process. SD-02 requires published
+Knowledge Base dependencies. Production host assembly requires exact published
+dependencies from both
+components. Source tests, local adapter conformance, and the official SDK
+protocol fixture establish source behavior; they do not establish real host
+login, production storage, or actual requested client acceptance on either host.
 
 ## Repository and development artifact gates
 
@@ -243,9 +252,12 @@ Git references, copied source, workspace paths, and unpublished production
 tarballs do not substitute for exact verified registry releases.
 
 P-00 and PG-01/RG-01 still require actual existing-login/current-Admin consent,
-each requested client and provider mode, host-attested staging evidence, and
-credential/evidence failure cases on both hosts. Source, emulator, SDK,
-registry, and provenance results cannot close those gates. Preserve staff
-approval/publication, privacy, isolation, bounded work, and full human workflows
-before activation, A-01, or supervised pilots. Private host configuration and
+Codex, Claude Code, Grok Bot's desktop application with its hosted agent, and
+T3 Code in Codex-provider mode, host-attested staging evidence, and
+credential/evidence failure cases on both hosts. Other T3 providers remain
+unproven. Source, emulator, SDK, registry, and provenance results cannot close
+those gates. Preserve staff approval/publication, privacy, isolation, bounded
+work, and full human workflows before activation, A-01, or supervised pilots.
+Future collection-specific delegation, new scopes, retention, and operations
+work remains deferred to its governing tasks. Private host configuration and
 operational evidence remain in their owning private systems.
