@@ -336,6 +336,61 @@ for (const [backend, makeStore] of storeFactories) {
       ).rejects.toMatchObject({ code: "invalid_token" });
     });
 
+    it("requires integral access lifetimes and refuses a refresh with less than one whole family second remaining", async () => {
+      const traced = traceStore(await makeStore());
+      expect(() =>
+        fixture(traced.store, {
+          ...configuration(),
+          limits: { accessLifetimeSeconds: 0.5 },
+        }),
+      ).toThrowError(expect.objectContaining({ code: "invalid_request" }));
+      const world = fixture(traced.store, {
+        ...configuration(),
+        limits: {
+          accessLifetimeSeconds: 1,
+          refreshFamilyLifetimeSeconds: 2,
+        },
+      });
+      const { tokens } = await world.completeDevice([READ]);
+      expect(tokens.expires_in).toBe(1);
+      await expect(
+        world.service.authenticate({
+          token: tokens.access_token,
+          resource: RESOURCE,
+        }),
+      ).resolves.toMatchObject({ clientId: CLIENT });
+      const before = await traced.snapshot();
+      const transactionsBefore = traced.transactions.length;
+      world.advance(1.5);
+      const refresh = {
+        clientId: CLIENT,
+        resource: RESOURCE,
+        refreshToken: tokens.refresh_token,
+      };
+      await expect(world.service.refresh(refresh)).rejects.toMatchObject({
+        code: "invalid_grant",
+      });
+      const after = await traced.snapshot();
+      expect(traced.transactions).toHaveLength(transactionsBefore);
+      expect(after).toEqual(before);
+      expect(
+        after.flatMap(({ rows }) =>
+          rows.filter(({ record }) => record.kind === "consumed"),
+        ),
+      ).toEqual([]);
+      expect(JSON.stringify(after)).not.toContain("agent_access.refreshed");
+      world.advance(0.5);
+      await expect(
+        world.service.authenticate({
+          token: tokens.access_token,
+          resource: RESOURCE,
+        }),
+      ).rejects.toMatchObject({ code: "invalid_token" });
+      await expect(world.service.refresh(refresh)).rejects.toMatchObject({
+        code: "invalid_grant",
+      });
+    });
+
     it("keeps terminal revocation available after a host lowers its configured row cap", async () => {
       const traced = traceStore(await makeStore());
       for (const transition of [

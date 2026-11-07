@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
+import {
+  ServerError,
+  TemporarilyUnavailableError,
+} from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import {
   createAgentAccessHttp,
   createProtectedResourceAuthenticator,
@@ -741,7 +746,10 @@ describe("required host limiter boundary", () => {
       f.http,
       post(f.configured.endpoints.deviceAuthorization, deviceBody()),
     );
-    await expectPrivateError(response, 429, "server_error");
+    expect(await parseErrorResponse(response.clone())).toBeInstanceOf(
+      TemporarilyUnavailableError,
+    );
+    await expectPrivateError(response, 429, "temporarily_unavailable");
     expect(response.headers.get("retry-after")).toBe("7");
     expect(calls).toBe(1);
     expect(f.authority.calls).toBe(0);
@@ -756,6 +764,9 @@ describe("required host limiter boundary", () => {
     const response = await handled(
       f.http,
       post(f.configured.endpoints.deviceAuthorization, deviceBody()),
+    );
+    expect(await parseErrorResponse(response.clone())).toBeInstanceOf(
+      ServerError,
     );
     await expectPrivateError(response, 503, "server_error");
     expect(f.authority.calls).toBe(0);

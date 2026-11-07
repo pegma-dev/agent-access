@@ -25,8 +25,8 @@ afterEach(async () => {
   host = undefined;
 });
 
-async function fixture() {
-  host = await createSyntheticHost();
+async function fixture(options?: Parameters<typeof createSyntheticHost>[0]) {
+  host = await createSyntheticHost(options);
   return host;
 }
 
@@ -154,6 +154,70 @@ describe("published MCP SDK client against a synthetic HTTP host", () => {
         })
       ).status,
     ).toBe(403);
+  });
+
+  it.each(["{malformed-session-data", "null", "[]", "{}", '{"csrf":1}'])(
+    "fails closed without approving a device when stored session data is invalid (%#)",
+    async (initialSessionData) => {
+      const current = await fixture({ initialSessionData });
+      const issued = await formPost(
+        current.configuration.endpoints.deviceAuthorization,
+        {
+          client_id: CLIENT_ID,
+          resource: current.configuration.resource,
+          scope: SCOPE,
+        },
+      );
+      expect(issued.status).toBe(200);
+      const device = (await issued.json()) as {
+        device_code: string;
+        user_code: string;
+      };
+      const approval = await fetch(`${current.origin}/host/approve`, {
+        method: "POST",
+        redirect: "manual",
+        headers: {
+          Cookie: current.browser.cookie,
+          Origin: current.origin,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          user_code: device.user_code,
+          decision: "approve",
+          csrf: current.browser.csrf,
+        }),
+      });
+      expect(approval.status).toBe(503);
+      expect(approval.headers.get("Cache-Control")).toBe("no-store");
+      expect(approval.headers.get("X-Content-Type-Options")).toBe("nosniff");
+      expect(approval.headers.get("Referrer-Policy")).toBe("no-referrer");
+      expect(approval.headers.get("Location")).toBeNull();
+      expect(await approval.text()).toBe("");
+      const pending = await formPost(current.configuration.endpoints.token, {
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        client_id: CLIENT_ID,
+        resource: current.configuration.resource,
+        device_code: device.device_code,
+      });
+      expect(((await pending.json()) as { error?: string }).error).toBe(
+        "authorization_pending",
+      );
+    },
+  );
+
+  it("returns a content-free uncacheable response for unexpected host route failures", async () => {
+    const current = await fixture();
+    const failed = await fetch(
+      `${current.origin}/host/device?user_code=invalid`,
+      {
+        headers: { Cookie: current.browser.cookie },
+      },
+    );
+    expect(failed.status).toBe(503);
+    expect(failed.headers.get("Cache-Control")).toBe("no-store");
+    expect(failed.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(failed.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect(await failed.text()).toBe("");
   });
 
   it("does not exchange an authorization code with the wrong SDK verifier", async () => {

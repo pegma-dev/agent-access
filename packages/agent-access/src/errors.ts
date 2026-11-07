@@ -12,6 +12,7 @@ export type OAuthErrorCode =
   | "unsupported_grant_type"
   | "invalid_token"
   | "insufficient_scope"
+  | "temporarily_unavailable"
   | "server_error";
 
 const DESCRIPTIONS: Readonly<Record<OAuthErrorCode, string>> = Object.freeze({
@@ -28,6 +29,7 @@ const DESCRIPTIONS: Readonly<Record<OAuthErrorCode, string>> = Object.freeze({
   unsupported_grant_type: "The grant type is unsupported.",
   invalid_token: "The access credential is invalid.",
   insufficient_scope: "The credential does not grant the required scope.",
+  temporarily_unavailable: "The service is temporarily busy. Try again later.",
   server_error: "The service is temporarily unavailable.",
 });
 
@@ -44,7 +46,7 @@ export class OAuthError extends Error {
     this.code = code;
     this.status =
       status ??
-      (code === "server_error"
+      (code === "server_error" || code === "temporarily_unavailable"
         ? 503
         : code === "invalid_token"
           ? 401

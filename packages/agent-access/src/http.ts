@@ -112,14 +112,9 @@ function errorResponse(
 ): Response {
   const safe =
     error instanceof OAuthError ? error : new OAuthError("server_error");
-  // RFC 6749/8628 token errors use 400, including a denied device authorization.
+  // RFC 8628 reports a denied device authorization at the token endpoint as 400.
   const status =
-    tokenEndpoint &&
-    (safe.code === "access_denied" ||
-      safe.code === "insufficient_scope" ||
-      safe.code === "invalid_token")
-      ? 400
-      : safe.status;
+    tokenEndpoint && safe.code === "access_denied" ? 400 : safe.status;
   return json(safe.toJSON(), status, headers);
 }
 
@@ -360,7 +355,7 @@ async function limited(
   const retry =
     typeof result === "object" ? result.retryAfterSeconds : undefined;
   return errorResponse(
-    new OAuthError("server_error", 429),
+    new OAuthError("temporarily_unavailable", 429),
     false,
     retry === undefined ? undefined : { "Retry-After": String(retry) },
   );

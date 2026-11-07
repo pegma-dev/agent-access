@@ -6,6 +6,11 @@ IsoTimestamp, `@pegma/storage-core` Store, and transactional `@pegma/audit`.
 The host keeps its existing login, session, administrator policy, browser
 CSRF/origin checks, distributed request limiting, and resource operations.
 
+Custom transports that call the service directly must apply the same host
+durable limiter before public authorization, token polling/exchange, refresh,
+and revocation requests. Persisted device polling backoff does not replace
+that admission control. The supplied Fetch adapter requires this limiter.
+
 ## Configuration
 
 `AgentAccessOptions` supplies `configuration`, `store`, `clock`, and
@@ -101,6 +106,8 @@ verifier. Refresh rotates the credential, retains all consumed hashes during
 the family's active lifetime, and detects known reuse. Random invalid input
 never revokes a family merely because its locator matches. Optional refresh
 `scopes` narrow only the new access token; family consent remains unchanged.
+Returned `expires_in` values are always positive; at the absolute family expiry
+or within its final fractional second, the client must link again.
 
 `DelegatedAccess` contains `grantId`, `clientId`, `resource`, `scopes`, and
 `access`. Every authentication and refresh resolves current owner authority
@@ -142,6 +149,10 @@ Raw returned credentials must never be persisted, logged, or audited.
 `toJSON()` returns `{ error, error_description }`. Invalid credentials and
 storage failures never include supplied values or underlying causes. Storage
 unavailability uses `server_error` with HTTP 503; unknown outcomes fail closed.
+The HTTP adapter distinguishes host limiter denial as HTTP 429 with
+`temporarily_unavailable` and optional `Retry-After`, while limiter failure uses
+HTTP 503 with `server_error`. `temporarily_unavailable` defaults to HTTP 503
+when constructed without a status override.
 
 ## Retention and activation
 

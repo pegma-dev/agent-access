@@ -24,11 +24,16 @@ const PRINCIPAL = "fictional-admin";
 const LINK = "agent.access.link";
 const COOKIE = "synthetic_browser";
 const MAX_BODY_BYTES = 16_384;
+const SAFE_RESPONSE_HEADERS = {
+  "Cache-Control": "no-store",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+};
 
 function response(status: number): Response {
   return new Response(null, {
     status,
-    headers: { "Cache-Control": "no-store" },
+    headers: SAFE_RESPONSE_HEADERS,
   });
 }
 
@@ -81,7 +86,12 @@ async function writeResponse(
   target.end(Buffer.from(await result.arrayBuffer()));
 }
 
-export async function createSyntheticHost() {
+export async function createSyntheticHost(
+  options: {
+    /** Test-only fault input for this fictional host; Sessions still owns storage. */
+    readonly initialSessionData?: string;
+  } = {},
+) {
   const store = createMemoryStore();
   let now = Date.now();
   const clock = { now: () => new Date(now).toISOString() };
@@ -99,9 +109,16 @@ export async function createSyntheticHost() {
   const sessions = createSessionStore(store, { clock });
   const sessionId = crypto.randomUUID();
   const csrf = crypto.randomUUID();
+  const initialSessionData =
+    options.initialSessionData ?? JSON.stringify({ csrf });
+  if (
+    typeof initialSessionData !== "string" ||
+    new TextEncoder().encode(initialSessionData).byteLength > MAX_BODY_BYTES
+  )
+    throw new Error("Synthetic session fixture data exceeds its limit");
   await sessions.create(sessionId, {
     principalId: PRINCIPAL,
-    data: JSON.stringify({ csrf }),
+    data: initialSessionData,
   });
   const browserCookie = `${COOKIE}=${sessionId}`;
   let route: (request: Request) => Promise<Response> = async () =>
@@ -116,7 +133,7 @@ export async function createSyntheticHost() {
       );
     })().catch(() => {
       // Do not print errors: network exceptions can embed credential-bearing URLs.
-      if (!target.headersSent) target.writeHead(500);
+      if (!target.headersSent) target.writeHead(503, SAFE_RESPONSE_HEADERS);
       target.end();
     });
   });
@@ -193,7 +210,22 @@ export async function createSyntheticHost() {
     const access = currentAccess();
     if (!hasPermission(access, LINK)) return response(403);
     if (options.mutation) {
-      const saved = JSON.parse(session.data) as { csrf?: unknown };
+      let saved: unknown;
+      try {
+        saved = JSON.parse(session.data);
+      } catch {
+        return response(503);
+      }
+      if (
+        typeof saved !== "object" ||
+        saved === null ||
+        Array.isArray(saved) ||
+        !("csrf" in saved) ||
+        typeof saved.csrf !== "string" ||
+        saved.csrf.length === 0 ||
+        saved.csrf.length > 128
+      )
+        return response(503);
       if (
         request.headers.get("Origin") !== origin ||
         request.headers.get("X-CSRF-Token") !== saved.csrf

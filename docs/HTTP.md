@@ -3,7 +3,7 @@
 `createAgentAccessHttp({ service, configuration, authenticateBrowser, limit })`
 returns `{ handle(request): Promise<Response | null> }`. Pass the same
 configuration to the service and adapter. A null result leaves routing to the
-host. There are no runtime dependencies or framework bindings.
+host. The adapter adds no framework or HTTP runtime dependency.
 
 The adapter serves GET authorization-server metadata at the RFC 8414 issuer
 discovery URL, GET protected-resource metadata at the exact configured
@@ -17,8 +17,9 @@ PKCE, query authorization responses with `iss`, and header bearer transport.
 `limit(request, { endpoint })` is required and calls the existing host limiter
 before protocol processing. Endpoint names are `authorize`,
 `device_authorization`, `token`, and `revocation`. Return a Promise of a boolean
-or `{ allowed, retryAfterSeconds? }`. Denial returns HTTP 429 with an optional
-`Retry-After`; limiter failure or an invalid result fails closed with HTTP 503.
+or `{ allowed, retryAfterSeconds? }`. Denial returns HTTP 429 with OAuth
+`temporarily_unavailable` and an optional `Retry-After`. Limiter failure or an
+invalid result fails closed with HTTP 503 and OAuth `server_error`.
 The service's device polling interval is a separate grant-level control.
 
 Every protocol field is a singleton. Unknown fields, malformed encoding,

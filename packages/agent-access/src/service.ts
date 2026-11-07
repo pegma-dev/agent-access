@@ -688,8 +688,6 @@ class AgentAccessService implements AgentAccessServicePort {
     selected: readonly string[],
     refresh = false,
   ): Promise<{ readonly head: GrantHead; readonly result: TokenResult }> {
-    const accessToken = createCredential("access", head.locator);
-    const refreshToken = createCredential("refresh", head.locator);
     const expiresAt = refresh
       ? head.expiresAt
       : at(instant, this.configuration.limits.refreshFamilyLifetimeSeconds);
@@ -700,6 +698,13 @@ class AgentAccessService implements AgentAccessServicePort {
           this.configuration.limits.accessLifetimeSeconds * 1_000,
       ),
     ).toISOString();
+    const expiresIn = Math.floor(
+      (Date.parse(accessExpiresAt) - instant.milliseconds) / 1_000,
+    );
+    // An absolute family deadline never permits a zero-lifetime successor.
+    if (expiresIn < 1) throw new OAuthError("invalid_grant");
+    const accessToken = createCredential("access", head.locator);
+    const refreshToken = createCredential("refresh", head.locator);
     return {
       head: {
         ...head,
@@ -714,12 +719,7 @@ class AgentAccessService implements AgentAccessServicePort {
       result: {
         access_token: accessToken,
         token_type: "Bearer",
-        expires_in: Math.max(
-          0,
-          Math.floor(
-            (Date.parse(accessExpiresAt) - instant.milliseconds) / 1_000,
-          ),
-        ),
+        expires_in: expiresIn,
         refresh_token: refreshToken,
         scope: selected.join(" "),
       },
