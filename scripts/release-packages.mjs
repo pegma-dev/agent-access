@@ -1,73 +1,115 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash, timingSafeEqual } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import {
+  access,
+  appendFile,
+  copyFile,
+  lstat,
   mkdtemp,
   mkdir,
   readFile,
   readdir,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, resolve } from "node:path";
+import {
+  basename,
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  resolve,
+} from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  RELEASE_PACKAGES,
+  STABLE_VERSION,
+  releaseDependencies,
+  verifyReleaseIdentity,
+} from "./release-contract.mjs";
+import {
+  verifyPreparedManifest,
+  writePreparedManifest,
+} from "./release-manifest.mjs";
 
-const PACKAGE = {
-  directory: "agent-access",
-  name: "@pegma/agent-access",
-};
-const REPOSITORY_URL = "git+https://github.com/pegma-dev/agent-access.git";
-const RUNTIME_DEPENDENCIES = {
-  "@pegma/audit": "0.2.0",
-  "@pegma/authorization-core": "0.4.0",
-  "@pegma/spine": "0.1.2",
-  "@pegma/storage-core": "0.4.0",
-};
-const REVIEWED_PNPM_VERSION = "10.34.5";
-const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+const root = fileURLToPath(new URL("../", import.meta.url));
+const packages = RELEASE_PACKAGES;
+export { RELEASE_PACKAGES, releaseDependencies };
 
-export const RELEASE_PACKAGES = [PACKAGE];
-
-function fail(message) {
-  throw new Error(message);
-}
-
-async function readJson(path) {
-  return JSON.parse(await readFile(path, "utf8"));
-}
-
-function safeEqual(left, right) {
-  const leftBytes = Buffer.from(left);
-  const rightBytes = Buffer.from(right);
-  return (
-    leftBytes.length === rightBytes.length &&
-    timingSafeEqual(leftBytes, rightBytes)
-  );
-}
-
-function run(command, arguments_, options = {}) {
+function run(command, arguments_, cwd, env = process.env) {
   const result = spawnSync(command, arguments_, {
-    cwd: options.cwd,
+    cwd,
+    env,
     encoding: "utf8",
-    env: options.env ?? process.env,
-    shell: options.shell ?? false,
-    stdio: options.capture ? "pipe" : "inherit",
+    shell: false,
+    maxBuffer: 8 * 1024 * 1024,
   });
-  if (result.error) throw result.error;
-  if (result.status !== 0 && !options.allowFailure) {
-    const detail = [result.stdout, result.stderr].filter(Boolean).join("\n");
-    fail(
-      `${command} ${arguments_.join(" ")} failed with exit code ${String(result.status)}${detail ? `:\n${detail}` : ""}`,
-    );
+  if (result.error || result.status !== 0) {
+    throw new Error("Release build, pack, or consumer command failed.");
   }
-  return result;
+  return result.stdout.trim();
 }
 
-function runNpm(arguments_, options = {}) {
-  // Invoke npm's JavaScript entrypoint directly, including on Windows. Never
-  // interpret arguments through a shell or mistake pnpm's npm_execpath for npm.
+async function exists(path) {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function npmCliPath(preparedRelease = false) {
+  if (preparedRelease) {
+    const candidate = process.env.RELEASE_NPM_CLI;
+    assert.ok(
+      typeof candidate === "string" &&
+        isAbsolute(candidate) &&
+        basename(candidate) === "npm-cli.js" &&
+        (await exists(candidate)),
+      "The reviewed release npm CLI must be an absolute npm-cli.js path.",
+    );
+    assert.equal(
+      process.env.RELEASE_NPM_VERSION,
+      "11.18.0",
+      "Release preparation requires the reviewed npm version.",
+    );
+    const [major, minor] = process.versions.node.split(".").map(Number);
+    assert.ok(
+      major > 22 || (major === 22 && minor >= 14),
+      "Release preparation requires Node 22.14 or newer.",
+    );
+    const metadata = await lstat(candidate);
+    assert.ok(
+      metadata.isFile() && !metadata.isSymbolicLink(),
+      "The release npm CLI must be a regular file.",
+    );
+    const versionEnvironment = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (
+        /^(?:PATH|PATHEXT|SystemRoot|WINDIR|COMSPEC|TEMP|TMP|HOME|USERPROFILE|LOCALAPPDATA|APPDATA)$/iu.test(
+          key,
+        )
+      ) {
+        versionEnvironment[key] = value;
+      }
+    }
+    assert.equal(
+      run(
+        process.execPath,
+        [candidate, "--version"],
+        tmpdir(),
+        versionEnvironment,
+      ),
+      "11.18.0",
+      "Release preparation npm CLI differs from the reviewed version.",
+    );
+    return candidate;
+  }
   const directories = [
     dirname(process.execPath),
     ...(process.env.PATH ?? "").split(delimiter).filter(Boolean),
@@ -80,31 +122,39 @@ function runNpm(arguments_, options = {}) {
   }
   for (const directory of directories) {
     const executable = join(directory, "npm");
-    if (existsSync(executable)) {
-      const target = realpathSync(executable);
+    if (await exists(executable)) {
+      const target = await realpath(executable);
       if (basename(target) === "npm-cli.js") candidates.push(target);
     }
   }
-  const npm = candidates.find((candidate) => existsSync(candidate));
-  if (npm === undefined)
-    fail("Cannot locate npm-cli.js beside Node.js or on PATH.");
-  return run(process.execPath, [npm, ...arguments_], options);
+  for (const candidate of candidates) {
+    if (await exists(candidate)) return candidate;
+  }
+  throw new Error("Cannot locate npm-cli.js beside Node.js or on PATH.");
 }
 
-function gitCommand() {
-  return process.platform === "win32" ? "git.exe" : "git";
+async function json(path) {
+  return JSON.parse(await readFile(path, "utf8"));
 }
 
-function hashTarball(bytes) {
-  return {
-    shasum: createHash("sha1").update(bytes).digest("hex"),
-    integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
-  };
+const rootDirectory = root;
+const PACKAGE = RELEASE_PACKAGES[0];
+const REPOSITORY_URL = "git+https://github.com/pegma-dev/agent-access.git";
+const RUNTIME_DEPENDENCIES = releaseDependencies(PACKAGE.directory, "0.1.0");
+const REVIEWED_PNPM_VERSION = "10.34.5";
+const STABLE_SEMVER = STABLE_VERSION;
+
+function fail(message) {
+  throw new Error(message);
+}
+
+async function readJson(path) {
+  return json(path);
 }
 
 function pnpmLockfileHasImporter(lockfile, importer) {
   let inImporters = false;
-  for (const line of lockfile.split("\n")) {
+  for (const line of lockfile.split(/\r?\n/u)) {
     if (!inImporters) {
       if (line === "importers:") inImporters = true;
       continue;
@@ -130,67 +180,8 @@ function exportTargets(value) {
   return [];
 }
 
-export function validateReleaseTag(options = {}) {
-  const root = resolve(options.root ?? defaultRoot());
-  const releaseTag = options.releaseTag ?? process.env.RELEASE_TAG;
-  const expectedReleaseCommit =
-    options.expectedReleaseCommit ?? process.env.RELEASE_COMMIT;
-  if (releaseTag === undefined || !/^v\d+\.\d+\.\d+$/u.test(releaseTag)) {
-    fail("a stable release tag is required");
-  }
-  if (
-    expectedReleaseCommit === undefined ||
-    !/^[0-9a-f]{40,64}$/u.test(expectedReleaseCommit)
-  ) {
-    fail("an exact release event commit is required");
-  }
-
-  const tagRef = `refs/tags/${releaseTag}`;
-  const type = run(gitCommand(), ["cat-file", "-t", tagRef], {
-    cwd: root,
-    capture: true,
-    allowFailure: true,
-  });
-  if (type.status !== 0 || type.stdout.trim() !== "tag") {
-    fail("the release ref must be an annotated tag object");
-  }
-  const headCommit = run(gitCommand(), ["rev-parse", "HEAD"], {
-    cwd: root,
-    capture: true,
-  }).stdout.trim();
-  const tagCommit = run(gitCommand(), ["rev-parse", `${tagRef}^{commit}`], {
-    cwd: root,
-    capture: true,
-  }).stdout.trim();
-  if (
-    !safeEqual(headCommit, tagCommit) ||
-    !safeEqual(headCommit, expectedReleaseCommit)
-  ) {
-    fail(
-      "the release checkout, signed tag target, and release event commit must match",
-    );
-  }
-  const signature = run(gitCommand(), ["verify-tag", "--raw", tagRef], {
-    cwd: root,
-    capture: true,
-    allowFailure: true,
-  });
-  if (signature.status !== 0) {
-    fail("the release tag signature is not valid for an approved signer");
-  }
-  const onMain = run(
-    gitCommand(),
-    ["merge-base", "--is-ancestor", tagCommit, "refs/remotes/origin/main"],
-    { cwd: root, capture: true, allowFailure: true },
-  );
-  if (onMain.status !== 0) {
-    fail("the release tag commit must be contained in origin/main");
-  }
-  return { headCommit, releaseTag };
-}
-
 export async function validateRepository(options = {}) {
-  const root = resolve(options.root ?? defaultRoot());
+  const root = resolve(options.root ?? rootDirectory);
   const rootManifest = await readJson(join(root, "package.json"));
   const packageDirectory = join(root, "packages", PACKAGE.directory);
   const manifest = await readJson(join(packageDirectory, "package.json"));
@@ -211,6 +202,7 @@ export async function validateRepository(options = {}) {
     manifest.license !== "MIT" ||
     manifest.type !== "module" ||
     manifest.publishConfig?.access !== "public" ||
+    Object.keys(manifest.publishConfig).length !== 1 ||
     manifest.engines?.node !== ">=22" ||
     manifest.repository?.type !== "git" ||
     manifest.repository?.url !== REPOSITORY_URL ||
@@ -223,6 +215,7 @@ export async function validateRepository(options = {}) {
     "peerDependencies",
     "optionalDependencies",
     "bundledDependencies",
+    "bundleDependencies",
   ]) {
     assert.equal(
       manifest[kind],
@@ -234,8 +227,9 @@ export async function validateRepository(options = {}) {
     !Array.isArray(manifest.files) ||
     manifest.files.length === 0 ||
     manifest.files.some((entry) => !entry.startsWith("dist/")) ||
-    typeof manifest.scripts?.prepack !== "string" ||
-    !manifest.scripts.prepack.includes("build")
+    !["pnpm run build", "pnpm run --silent build"].includes(
+      manifest.scripts?.prepack,
+    )
   ) {
     fail(`${PACKAGE.name} has an unsafe package allowlist or prepack`);
   }
@@ -289,75 +283,65 @@ export async function validateRepository(options = {}) {
     fail("public workspace inventory does not match the reviewed release list");
   }
 
-  if (options.requireClean) {
-    const status = run(gitCommand(), ["status", "--porcelain"], {
-      cwd: root,
-      capture: true,
-    }).stdout;
-    if (status.trim() !== "")
-      fail("release preparation requires a clean checkout");
+  return { root, manifest, packageDirectory };
+}
+
+async function validatePackages() {
+  const { manifest } = await validateRepository();
+  return [manifest];
+}
+
+function validateInventory(metadata) {
+  const paths = metadata.files.map(({ path }) => path);
+  for (const required of [
+    "package.json",
+    "README.md",
+    "LICENSE",
+    "dist/index.js",
+    "dist/index.d.ts",
+  ]) {
+    assert.ok(paths.includes(required), `Tarball is missing ${required}.`);
   }
-  if (options.requireMainAncestor) {
-    const head = run(gitCommand(), ["rev-parse", "HEAD"], {
-      cwd: root,
-      capture: true,
-    }).stdout.trim();
-    const onMain = run(
-      gitCommand(),
-      ["merge-base", "--is-ancestor", head, "refs/remotes/origin/main"],
-      { cwd: root, capture: true, allowFailure: true },
+  for (const path of paths) {
+    const parts = path.split("/");
+    assert.ok(!parts.some((part) => part === "." || part === ".."));
+    assert.ok(
+      ["package.json", "README.md", "LICENSE"].includes(path) ||
+        (/^dist\/[A-Za-z0-9_./-]+\.(?:js|js\.map|d\.ts|d\.ts\.map)$/u.test(
+          path,
+        ) &&
+          !/\.(?:test|spec)\./u.test(path)),
+      `Unexpected packaged file: ${path}`,
     );
-    if (onMain.status !== 0) {
-      fail("release commit must be contained in origin/main");
+  }
+}
+
+function sourceEnvironment(directory) {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (
+      /^(?:PATH|PATHEXT|SystemRoot|WINDIR|COMSPEC|TEMP|TMP|HOME|USERPROFILE|LOCALAPPDATA|APPDATA)$/iu.test(
+        key,
+      )
+    ) {
+      env[key] = value;
     }
   }
-
-  const releaseTag = options.releaseTag ?? process.env.RELEASE_TAG;
-  if (releaseTag !== undefined && releaseTag !== `v${manifest.version}`) {
-    fail(`release tag must be v${manifest.version}`);
-  }
-  const prerelease =
-    options.releasePrerelease ?? process.env.RELEASE_PRERELEASE ?? false;
-  if (prerelease === true || prerelease === "true") {
-    fail("prereleases cannot publish packages");
-  }
-  if (options.requireReleaseTag) {
-    validateReleaseTag({
-      root,
-      releaseTag,
-      expectedReleaseCommit: options.expectedReleaseCommit,
-    });
-  }
-  return { root, manifest, packageDirectory, releaseTag };
+  return {
+    ...env,
+    CI: "true",
+    npm_config_userconfig: join(directory, "user.npmrc"),
+    npm_config_globalconfig: join(directory, "global.npmrc"),
+    npm_config_cache: join(directory, "cache"),
+    npm_config_registry: "https://registry.npmjs.org/",
+    npm_config_ignore_scripts: "true",
+    npm_config_audit: "false",
+    npm_config_fund: "false",
+  };
 }
 
-function verifyPackedFiles(manifest, files) {
-  const paths = files.map(({ path }) => path);
-  for (const required of ["package.json", "README.md", "LICENSE"]) {
-    if (!paths.includes(required))
-      fail(`${manifest.name} is missing ${required}`);
-  }
-  if (
-    paths.some(
-      (path) =>
-        !["package.json", "README.md", "LICENSE"].includes(path) &&
-        (!/^dist\/[A-Za-z0-9_./-]+\.(?:js|js\.map|d\.ts|d\.ts\.map)$/u.test(
-          path,
-        ) ||
-          path.split("/").some((part) => part === "." || part === "..") ||
-          /\.(?:test|spec)\./u.test(path)),
-    )
-  ) {
-    fail(`${manifest.name} tarball contains an unreviewed file`);
-  }
-  for (const target of exportTargets(manifest.exports)) {
-    const path = target.replace(/^\.\//u, "");
-    if (!paths.includes(path)) fail(`${manifest.name} is missing ${path}`);
-  }
-}
-
-async function smokeTestTarball(tarball, manifest) {
-  const temporaryParent = realpathSync(tmpdir());
+async function smokeTestTarball(tarball, manifest, npm, env) {
+  const temporaryParent = await realpath(tmpdir());
   const directory = await mkdtemp(
     join(temporaryParent, "agent-access-release-smoke-"),
   );
@@ -366,15 +350,10 @@ async function smokeTestTarball(tarball, manifest) {
       join(directory, "package.json"),
       '{"name":"agent-access-release-smoke","private":true,"type":"module"}\n',
     );
-    const npmrc = join(directory, "npmrc");
-    await writeFile(npmrc, "registry=https://registry.npmjs.org/\n");
-    const env = {
-      ...process.env,
-      npm_config_userconfig: npmrc,
-      npm_config_registry: "https://registry.npmjs.org/",
-    };
-    runNpm(
+    run(
+      process.execPath,
       [
+        npm,
         "install",
         "--ignore-scripts",
         "--no-audit",
@@ -382,7 +361,8 @@ async function smokeTestTarball(tarball, manifest) {
         "--package-lock=false",
         tarball,
       ],
-      { cwd: directory, capture: true, env },
+      directory,
+      env,
     );
     const consumerSource = join(directory, "consumer.mts");
     await writeFile(
@@ -408,7 +388,7 @@ void decision;
     run(
       process.execPath,
       [
-        join(defaultRoot(), "node_modules", "typescript", "bin", "tsc"),
+        join(root, "node_modules", "typescript", "bin", "tsc"),
         "--strict",
         "--exactOptionalPropertyTypes",
         "--noUncheckedIndexedAccess",
@@ -422,7 +402,8 @@ void decision;
         "--skipLibCheck",
         consumerSource,
       ],
-      { cwd: directory, capture: true, env },
+      directory,
+      env,
     );
     for (const key of Object.keys(manifest.exports)) {
       const specifier =
@@ -486,291 +467,411 @@ await assert.rejects(service.authenticate({
 }), (error) => error instanceof api.OAuthError && error.code === "invalid_token");
 `,
         ],
-        { cwd: directory, capture: true, env },
+        directory,
+        env,
       );
     }
   } finally {
-    const cleanup = realpathSync(directory);
+    const cleanup = await realpath(directory);
     assert.equal(dirname(cleanup), temporaryParent);
     assert.ok(basename(cleanup).startsWith("agent-access-release-smoke-"));
     await rm(cleanup, { recursive: true, force: true });
   }
 }
 
-export async function prepareRelease(options = {}) {
-  const { root, manifest, packageDirectory, releaseTag } =
-    await validateRepository(options);
-  const gitCommit = run(gitCommand(), ["rev-parse", "HEAD"], {
-    cwd: root,
-    capture: true,
-  }).stdout.trim();
-  const output = resolve(root, options.output ?? ".release");
-  await mkdir(output, { recursive: true });
-  if ((await readdir(output)).length !== 0) {
-    fail(`release output directory must be empty: ${output}`);
-  }
-
-  runNpm(["run", "build"], { cwd: root });
-  const result = runNpm(
-    ["pack", packageDirectory, "--json", "--pack-destination", output],
-    { cwd: root, capture: true },
+async function prepareArtifacts(mode, options = {}) {
+  const manifests = await validatePackages();
+  const identity =
+    mode === "prepare"
+      ? verifyReleaseIdentity({
+          root,
+          tag: options.tag,
+          expectedCommit: options.expectedCommit,
+          version: manifests[0].version,
+        })
+      : undefined;
+  const npm = await npmCliPath(mode === "prepare");
+  const temporaryParent = await realpath(tmpdir());
+  const temporary = await mkdtemp(
+    join(temporaryParent, "pegma-agent-access-release-"),
   );
-  const [packed] = JSON.parse(result.stdout);
-  if (
-    packed?.name !== manifest.name ||
-    packed?.version !== manifest.version ||
-    typeof packed.filename !== "string" ||
-    !Array.isArray(packed.files)
-  ) {
-    fail("npm pack returned invalid metadata");
-  }
-  verifyPackedFiles(manifest, packed.files);
-  const tarballPath = join(output, basename(packed.filename));
-  const hashes = hashTarball(await readFile(tarballPath));
-  if (
-    !safeEqual(hashes.integrity, packed.integrity) ||
-    !safeEqual(hashes.shasum, packed.shasum)
-  ) {
-    fail("tarball hashes do not match npm pack metadata");
-  }
-  await smokeTestTarball(tarballPath, manifest);
-
-  const prepared = {
-    schemaVersion: 1,
-    gitCommit,
-    releaseTag: releaseTag ?? null,
-    package: {
-      name: manifest.name,
-      version: manifest.version,
-      tarball: basename(tarballPath),
-      integrity: hashes.integrity,
-      shasum: hashes.shasum,
-      files: packed.files
-        .map(({ path, size }) => ({ path, size }))
-        .sort((left, right) => left.path.localeCompare(right.path)),
-    },
-  };
-  const manifestPath = join(output, "package-manifest.json");
-  await writeFile(manifestPath, `${JSON.stringify(prepared, null, 2)}\n`);
-  return { manifestPath, manifest: prepared };
-}
-
-function queryRegistryIntegrity(name, version) {
-  const spec = `${name}@${version}`;
-  const result = runNpm(["view", spec, "dist.integrity", "--json"], {
-    capture: true,
-    allowFailure: true,
-  });
-  if (result.status === 0) {
-    const integrity = JSON.parse(result.stdout);
-    if (typeof integrity !== "string" || integrity.length === 0) {
-      fail(`${spec} exists without dist.integrity`);
+  try {
+    await writeFile(join(temporary, "user.npmrc"), "");
+    await writeFile(join(temporary, "global.npmrc"), "");
+    const env = sourceEnvironment(temporary);
+    await cleanBuildOutputs();
+    // Emit every output from this checkout. Packing below disables scripts so
+    // an incremental prepack cannot replace this fresh artifact.
+    run(
+      process.execPath,
+      [
+        join(root, "node_modules", "typescript", "bin", "tsc"),
+        "-b",
+        "--force",
+        ...packages.map(({ directory }) =>
+          join(root, "packages", directory, "tsconfig.json"),
+        ),
+      ],
+      root,
+      env,
+    );
+    const artifacts = [];
+    for (const [index, specification] of packages.entries()) {
+      const output = run(
+        process.execPath,
+        [
+          npm,
+          "pack",
+          "--json",
+          "--ignore-scripts",
+          "--registry",
+          "https://registry.npmjs.org/",
+          "--pack-destination",
+          temporary,
+        ],
+        join(root, "packages", specification.directory),
+        env,
+      );
+      const packed = JSON.parse(output);
+      assert.equal(packed.length, 1);
+      const metadata = packed[0];
+      assert.equal(metadata.name, specification.name);
+      assert.equal(metadata.version, manifests[index].version);
+      assert.equal(basename(metadata.filename), metadata.filename);
+      assert.equal(
+        metadata.filename,
+        `${specification.name.slice(1).replace("/", "-")}-${manifests[index].version}.tgz`,
+      );
+      validateInventory(metadata);
+      const bytes = await readFile(join(temporary, metadata.filename));
+      assert.equal(bytes.length, metadata.size);
+      assert.equal(
+        createHash("sha1").update(bytes).digest("hex"),
+        metadata.shasum,
+      );
+      assert.equal(
+        `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
+        metadata.integrity,
+      );
+      artifacts.push(metadata);
     }
-    return integrity;
+    await smokeTestTarball(
+      join(temporary, artifacts[0].filename),
+      manifests[0],
+      npm,
+      env,
+    );
+    if (mode === "pack") {
+      const releases = join(root, ".release");
+      await mkdir(releases, { recursive: true });
+      const destination = await mkdtemp(join(releases, "agent-access-"));
+      for (const { filename } of artifacts) {
+        await copyFile(join(temporary, filename), join(destination, filename));
+      }
+      await writeFile(
+        join(destination, "manifest.json"),
+        `${JSON.stringify({ schemaVersion: 1, artifacts }, null, 2)}\n`,
+      );
+      console.log(`Prepared verified artifacts in ${destination}`);
+    }
+    if (mode === "prepare") {
+      // Check the reviewed source again after build and consumer execution,
+      // before creating any output directory that could dirty the checkout.
+      assert.deepEqual(
+        verifyReleaseIdentity({
+          root,
+          tag: options.tag,
+          expectedCommit: options.expectedCommit,
+          version: identity.version,
+        }),
+        identity,
+      );
+      const preparedDir = await preparedDirectory(options.output);
+      for (const { filename } of artifacts) {
+        await copyFile(
+          join(temporary, filename),
+          join(preparedDir, filename),
+          constants.COPYFILE_EXCL,
+        );
+      }
+      const prepared = await writePreparedManifest({
+        preparedDir,
+        identity,
+        artifacts: artifacts.map((artifact, index) => ({
+          name: artifact.name,
+          version: artifact.version,
+          filename: artifact.filename,
+          size: artifact.size,
+          shasum: artifact.shasum,
+          integrity: artifact.integrity,
+          dependencies: manifests[index].dependencies,
+          files: artifact.files
+            .map(({ path, size }) => ({ path, size }))
+            .sort((left, right) => left.path.localeCompare(right.path)),
+        })),
+      });
+      return { preparedDir, ...prepared };
+    }
+    console.log(
+      `Verified packaging and clean-consumer imports for ${artifacts.length} packages, including public types and OAuth API behavior.`,
+    );
+  } finally {
+    const cleanup = await realpath(temporary);
+    assert.equal(dirname(cleanup), temporaryParent);
+    assert.ok(basename(cleanup).startsWith("pegma-agent-access-release-"));
+    await rm(cleanup, { recursive: true, force: true });
   }
-  const output = `${result.stdout}\n${result.stderr}`;
-  if (/\bE404\b/u.test(output)) return null;
-  fail(`npm registry lookup failed for ${spec}:\n${output.trim()}`);
 }
 
-export function decidePublication(localIntegrity, registryIntegrity) {
-  if (registryIntegrity === null) return "publish";
-  if (safeEqual(localIntegrity, registryIntegrity)) return "skip";
-  fail("the registry version exists with different tarball integrity");
-}
-
-function requireTrustedPublishingNpm() {
-  const version = runNpm(["--version"], { capture: true }).stdout.trim();
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-.+)?$/u.exec(version);
-  if (match === null) fail(`could not parse npm version ${version}`);
-  const [major, minor, patch] = match.slice(1).map(Number);
-  if (
-    major < 11 ||
-    (major === 11 && minor < 5) ||
-    (major === 11 && minor === 5 && patch < 1)
-  ) {
-    fail("trusted publishing requires npm 11.5.1 or newer");
+async function optionalMetadata(path) {
+  try {
+    return await lstat(path);
+  } catch (error) {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
   }
 }
 
-function wait(milliseconds) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
-}
-
-function confirmRegistryIntegrity(record) {
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const integrity = queryRegistryIntegrity(record.name, record.version);
-    if (integrity !== null && safeEqual(record.integrity, integrity)) return;
-    if (attempt < 5) wait(2 ** attempt * 1000);
-  }
-  fail(
-    `${record.name}@${record.version} did not expose the prepared integrity`,
+async function canonicalNode(path, kind) {
+  const metadata = await lstat(path);
+  assert.ok(
+    !metadata.isSymbolicLink() &&
+      (kind === "directory" ? metadata.isDirectory() : metadata.isFile()),
+    "Release build output paths must not contain symlinks or special files.",
+  );
+  assert.equal(
+    await realpath(path),
+    path,
+    "Release build output paths must stay inside their canonical package.",
   );
 }
 
-async function verifyPreparedManifest(path) {
-  const prepared = await readJson(path);
-  const record = prepared.package;
-  if (
-    prepared.schemaVersion !== 1 ||
-    !/^[0-9a-f]{40,64}$/u.test(prepared.gitCommit) ||
-    prepared.releaseTag !== `v${record?.version}` ||
-    record?.name !== PACKAGE.name ||
-    !STABLE_SEMVER.test(record.version) ||
-    typeof record.integrity !== "string" ||
-    typeof record.shasum !== "string" ||
-    !Array.isArray(record.files)
-  ) {
-    fail("prepared package manifest is invalid");
+async function validateOutputTree(path) {
+  await canonicalNode(path, "directory");
+  for (const entry of await readdir(path, { withFileTypes: true })) {
+    const child = join(path, entry.name);
+    assert.equal(dirname(child), path);
+    if (entry.isDirectory()) {
+      await validateOutputTree(child);
+    } else {
+      await canonicalNode(child, "file");
+    }
   }
-  const currentCommit = run(gitCommand(), ["rev-parse", "HEAD"], {
-    cwd: defaultRoot(),
-    capture: true,
-  }).stdout.trim();
-  if (!safeEqual(currentCommit, prepared.gitCommit)) {
-    fail("prepared package manifest commit does not match the checkout");
+}
+
+export async function cleanBuildOutputs(checkoutRoot = root) {
+  const checkout = resolve(checkoutRoot);
+  await canonicalNode(checkout, "directory");
+  const packageRoot = join(checkout, "packages");
+  await canonicalNode(packageRoot, "directory");
+  const outputs = [];
+  // Preflight every target before removing any file. Output names are fixed by
+  // this reviewed producer; never turn tsconfig values into deletion targets.
+  for (const specification of packages) {
+    const packageDirectory = join(packageRoot, specification.directory);
+    assert.equal(dirname(packageDirectory), packageRoot);
+    await canonicalNode(packageDirectory, "directory");
+    const configurationPath = join(packageDirectory, "tsconfig.json");
+    await canonicalNode(configurationPath, "file");
+    const configuration = await json(configurationPath);
+    assert.equal(configuration.compilerOptions?.outDir, "dist");
+    assert.equal(configuration.compilerOptions?.rootDir, "src");
+    assert.equal(
+      configuration.compilerOptions?.tsBuildInfoFile,
+      "tsconfig.tsbuildinfo",
+    );
+    const directory = join(packageDirectory, "dist");
+    const buildInfo = join(packageDirectory, "tsconfig.tsbuildinfo");
+    assert.equal(dirname(directory), packageDirectory);
+    assert.equal(dirname(buildInfo), packageDirectory);
+    if (await optionalMetadata(directory)) await validateOutputTree(directory);
+    if (await optionalMetadata(buildInfo))
+      await canonicalNode(buildInfo, "file");
+    outputs.push({ directory, buildInfo });
   }
-  const expectedTarball = `${PACKAGE.name
-    .slice(1)
-    .replace("/", "-")}-${record.version}.tgz`;
-  if (record.tarball !== expectedTarball)
-    fail("prepared tarball name is invalid");
-  const tarball = resolve(dirname(path), record.tarball);
-  if (dirname(tarball) !== resolve(dirname(path))) {
-    fail("prepared tarball must be beside the package manifest");
+  for (const { directory, buildInfo } of outputs) {
+    // Recheck the exact targets immediately before deletion as well. Do not
+    // follow junctions/symlinks even when they point back inside the checkout.
+    if (await optionalMetadata(directory)) {
+      await validateOutputTree(directory);
+      await rm(directory, { recursive: true, force: true });
+    }
+    if (await optionalMetadata(buildInfo)) {
+      await canonicalNode(buildInfo, "file");
+      await rm(buildInfo);
+    }
   }
-  const hashes = hashTarball(await readFile(tarball));
-  if (
-    !safeEqual(hashes.integrity, record.integrity) ||
-    !safeEqual(hashes.shasum, record.shasum)
-  ) {
-    fail("prepared tarball has changed");
+}
+
+async function preparedDirectory(output) {
+  if (output === undefined) {
+    const releases = join(root, ".release");
+    await mkdir(releases, { recursive: true });
+    return realpath(await mkdtemp(join(releases, "agent-access-")));
   }
-  return prepared;
+  assert.equal(typeof output, "string", "Release output must be a directory.");
+  assert.ok(output.length > 0, "Release output must be a directory.");
+  const destination = resolve(root, output);
+  await mkdir(destination, { recursive: true });
+  const metadata = await lstat(destination);
+  assert.ok(
+    metadata.isDirectory() && !metadata.isSymbolicLink(),
+    "Release output must be a regular directory.",
+  );
+  assert.equal(
+    (await readdir(destination)).length,
+    0,
+    "Release output directory must be empty.",
+  );
+  return realpath(destination);
+}
+
+export async function prepareRelease(options = {}) {
+  return prepareArtifacts("prepare", options);
+}
+
+export async function preflightRelease(options = {}) {
+  const verified = await verifyPreparedManifest(options);
+  const { preflightRegistry } = await import("./release-registry.mjs");
+  return preflightRegistry(verified);
 }
 
 export async function publishPreparedRelease(options = {}) {
-  if (
-    process.env.GITHUB_ACTIONS !== "true" ||
-    process.env.GITHUB_EVENT_NAME !== "release"
-  ) {
-    fail("release:publish is restricted to a GitHub release workflow");
-  }
-  requireTrustedPublishingNpm();
-  const path = resolve(options.manifest ?? ".release/package-manifest.json");
-  const prepared = await verifyPreparedManifest(path);
-  const releaseTag = options.releaseTag ?? process.env.RELEASE_TAG;
-  const expectedCommit =
-    options.expectedReleaseCommit ?? process.env.RELEASE_COMMIT;
-  if (releaseTag !== prepared.releaseTag) {
-    fail("prepared manifest must match the release tag");
-  }
-  if (
-    expectedCommit === undefined ||
-    !/^[0-9a-f]{40,64}$/u.test(expectedCommit) ||
-    !safeEqual(expectedCommit, prepared.gitCommit)
-  ) {
-    fail("prepared package manifest must match the release event commit");
-  }
-
-  const record = prepared.package;
-  const decision = decidePublication(
-    record.integrity,
-    queryRegistryIntegrity(record.name, record.version),
-  );
-  if (decision === "skip") {
-    process.stdout.write(
-      `Verified existing ${record.name}@${record.version}; skipping.\n`,
-    );
-    return;
-  }
-  runNpm(
-    [
-      "publish",
-      resolve(dirname(path), record.tarball),
-      "--access",
-      "public",
-      "--provenance",
-    ],
-    { cwd: dirname(path) },
-  );
-  confirmRegistryIntegrity(record);
+  await verifyPreparedManifest(options);
+  const { publishPreparedRelease: publish } =
+    await import("./release-registry.mjs");
+  return publish(options);
 }
+
+export async function verifyRelease(options = {}) {
+  await verifyPreparedManifest(options);
+  const { verifyRegistryRelease } = await import("./release-registry.mjs");
+  return verifyRegistryRelease(options);
+}
+
+const usage =
+  "Usage: release-packages.mjs check|pack|prepare|preflight|publish|verify [options]";
 
 export function parseArguments(arguments_) {
-  const options = {};
-  for (let index = 0; index < arguments_.length; index += 1) {
-    const argument = arguments_[index];
-    if (argument === "--") continue;
-    if (argument === "--require-main-ancestor") {
-      options.requireMainAncestor = true;
-      continue;
-    }
-    if (argument === "--require-clean") {
-      options.requireClean = true;
-      continue;
-    }
-    if (argument === "--require-release-tag") {
-      options.requireReleaseTag = true;
-      continue;
-    }
-    const key =
-      argument === "--root"
-        ? "root"
-        : argument === "--output"
-          ? "output"
-          : argument === "--manifest"
-            ? "manifest"
-            : argument === "--expected-release-commit"
-              ? "expectedReleaseCommit"
-              : null;
-    if (key === null || arguments_[index + 1] === undefined) {
-      fail(`unknown or incomplete argument: ${argument}`);
-    }
-    options[key] = arguments_[index + 1];
-    index += 1;
+  const [command, ...flags] = arguments_;
+  assert.ok(
+    ["check", "pack", "prepare", "preflight", "publish", "verify"].includes(
+      command,
+    ),
+    usage,
+  );
+  if (command === "check" || command === "pack") {
+    assert.equal(flags.length, 0, "No additional arguments are supported.");
+    return { command, options: {} };
   }
-  return options;
+  const keys =
+    command === "prepare"
+      ? {
+          "--tag": "tag",
+          "--expected-commit": "expectedCommit",
+          "--out": "output",
+        }
+      : {
+          "--prepared-dir": "preparedDir",
+          "--manifest-sha256": "expectedManifestSha256",
+          "--tag": "expectedTag",
+          "--expected-commit": "expectedCommit",
+        };
+  const options = {};
+  for (let index = 0; index < flags.length; index += 2) {
+    const key = Object.hasOwn(keys, flags[index])
+      ? keys[flags[index]]
+      : undefined;
+    const value = flags[index + 1];
+    assert.ok(
+      key !== undefined &&
+        !Object.hasOwn(options, key) &&
+        typeof value === "string" &&
+        value.length > 0 &&
+        !value.startsWith("--") &&
+        !/[\u0000-\u001f\u007f]/u.test(value),
+      "Unknown, repeated, or incomplete release argument.",
+    );
+    options[key] = value;
+  }
+  const tag = command === "prepare" ? options.tag : options.expectedTag;
+  assert.ok(
+    typeof tag === "string" &&
+      tag.startsWith("v") &&
+      STABLE_VERSION.test(tag.slice(1)),
+    "An exact stable release tag is required.",
+  );
+  assert.ok(
+    typeof options.expectedCommit === "string" &&
+      /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(options.expectedCommit),
+    "An exact release event commit is required.",
+  );
+  if (command !== "prepare") {
+    assert.equal(
+      typeof options.preparedDir,
+      "string",
+      "A prepared release directory is required.",
+    );
+    assert.ok(
+      typeof options.expectedManifestSha256 === "string" &&
+        /^[0-9a-f]{64}$/u.test(options.expectedManifestSha256),
+      "An independent prepared manifest SHA-256 is required.",
+    );
+  }
+  return { command, options };
 }
 
-function defaultRoot() {
-  return resolve(dirname(fileURLToPath(import.meta.url)), "..");
+async function reportPrepared(prepared) {
+  const values = {
+    "prepared-dir": prepared.preparedDir,
+    "manifest-path": prepared.manifestPath,
+    "manifest-sha256": prepared.manifestSha256,
+  };
+  const output = Object.entries(values)
+    .map(([key, value]) => {
+      assert.ok(
+        !/[\u0000-\u001f\u007f]/u.test(value),
+        "Release output must be single-line.",
+      );
+      return `${key}=${value}\n`;
+    })
+    .join("");
+  process.stdout.write(output);
+  if (process.env.GITHUB_ACTIONS === "true" && process.env.GITHUB_OUTPUT) {
+    await appendFile(process.env.GITHUB_OUTPUT, output);
+  }
 }
 
 async function main() {
-  const [command, ...arguments_] = process.argv.slice(2);
-  const options = parseArguments(arguments_);
-  if (command === "check") {
-    const temporaryParent = realpathSync(tmpdir());
-    const output = await mkdtemp(
-      join(temporaryParent, "agent-access-release-check-"),
-    );
-    try {
-      await prepareRelease({ ...options, output });
-    } finally {
-      const cleanup = realpathSync(output);
-      assert.equal(dirname(cleanup), temporaryParent);
-      assert.ok(basename(cleanup).startsWith("agent-access-release-check-"));
-      await rm(cleanup, { recursive: true, force: true });
+  const { command, options } = parseArguments(process.argv.slice(2));
+  if (command === "check" || command === "pack") {
+    await prepareArtifacts(command);
+  } else if (command === "prepare") {
+    await reportPrepared(await prepareRelease(options));
+  } else if (command === "preflight") {
+    const plan = await preflightRelease(options);
+    for (const record of plan) {
+      console.log(`${record.name}@${record.version}: ${record.action}`);
     }
-    process.stdout.write(
-      "Verified package metadata, tarball inventory, and clean-consumer behavior.\n",
+  } else if (command === "publish") {
+    const result = await publishPreparedRelease(options);
+    console.log(
+      `Verified publication of ${result.published.length} packages; ${result.skipped.length} already identical.`,
     );
-    return;
+  } else {
+    const result = await verifyRelease(options);
+    console.log(
+      `Verified registry release and clean consumer for ${result.packages.length} packages.`,
+    );
   }
-  if (command === "pack") {
-    const { manifestPath } = await prepareRelease(options);
-    process.stdout.write(`Prepared release package at ${manifestPath}.\n`);
-    return;
-  }
-  if (command === "publish") {
-    await publishPreparedRelease(options);
-    return;
-  }
-  fail("usage: release-packages.mjs <check|pack|publish> [options]");
 }
 
-const isMain =
+if (
   process.argv[1] !== undefined &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (isMain) await main();
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}
