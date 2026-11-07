@@ -17,21 +17,63 @@ current-head code/security review and Node 22/24 gate.
 
 ## Bootstrap receipt: 2026-11-07
 
+The operator manually reran the post-publication preflight commands below at
+`2026-11-07T21:56:24Z`. The recorded outputs are manual operator observations,
+not CI verification results. Run each command from its producer's recorded
+source checkout, replacing `PREPARED_DIRECTORY` with that producer's immutable
+prepared artifact directory. Each independent manifest digest binds its full
+artifact set.
+
+### Agent Access
+
 The signed [`v0.1.0` tag](https://github.com/pegma-dev/agent-access/tree/v0.1.0)
-targets commit
+targets source commit
 [`d4db0065f22a9c090fc2831b3e18fbbc37c1639c`](https://github.com/pegma-dev/agent-access/commit/d4db0065f22a9c090fc2831b3e18fbbc37c1639c).
 [Preparation run 42415787142](https://github.com/pegma-dev/agent-access/actions/runs/42415787142)
 retained immutable artifact `13591317099` with independently recorded manifest
 SHA-256 `885d5422930e2dd3435f0ebea02fb74238b946c962715b2b1d81954684a10312`.
-Manual npm publication was accepted. Strict post-publication preflight returned
-`skip`, confirming exact registry bytes match that prepared artifact.
+Manual npm publication was accepted. The operator's postflight command was:
 
-All four Knowledge Base `0.1.0` bootstrap uploads were also accepted, and the
-full five-package set's exact registry bytes were confirmed. These are bootstrap
-integrity receipts, with OIDC provenance absent; they do not establish trusted
-release availability or host/client acceptance. Operators must verify actual
-distribution tags and investigate unexpected defaults before advertisement.
-The requested publish tag alone is not evidence that another tag is absent.
+```sh
+node scripts/release-packages.mjs preflight --prepared-dir PREPARED_DIRECTORY --manifest-sha256 885d5422930e2dd3435f0ebea02fb74238b946c962715b2b1d81954684a10312 --tag v0.1.0 --expected-commit d4db0065f22a9c090fc2831b3e18fbbc37c1639c
+```
+
+Recorded output at `2026-11-07T21:56:24Z`:
+
+```text
+@pegma/agent-access@0.1.0: skip
+```
+
+### Knowledge Base
+
+The signed [`v0.1.0` tag](https://github.com/pegma-dev/knowledge-base/tree/v0.1.0)
+targets source commit
+[`f053db194eb73610e9b4872e1562f071ab8e6a5f`](https://github.com/pegma-dev/knowledge-base/commit/f053db194eb73610e9b4872e1562f071ab8e6a5f).
+[Preparation run 42415793421](https://github.com/pegma-dev/knowledge-base/actions/runs/42415793421)
+retained immutable artifact `13591841615` with independently recorded manifest
+SHA-256 `45117cadad75a51aa9b818934974b60c17ba5ddee229fa766157a75035a653ee`.
+All four manual npm uploads were accepted. The operator's postflight command was:
+
+```sh
+node scripts/release-packages.mjs preflight --prepared-dir PREPARED_DIRECTORY --manifest-sha256 45117cadad75a51aa9b818934974b60c17ba5ddee229fa766157a75035a653ee --tag v0.1.0 --expected-commit f053db194eb73610e9b4872e1562f071ab8e6a5f
+```
+
+Recorded output at `2026-11-07T21:56:24Z`:
+
+```text
+@pegma/knowledge-base-contracts@0.1.0: skip
+@pegma/knowledge-base-core@0.1.0: skip
+@pegma/knowledge-base-application@0.1.0: skip
+@pegma/knowledge-base-mcp@0.1.0: skip
+```
+
+These `skip` results confirm that all five exact registry versions match their
+prepared artifact bytes. They are bootstrap integrity receipts with OIDC
+provenance absent; they do not establish trusted release availability or
+host/client acceptance. Actual distribution tags, including `latest`, require
+operator verification and investigation of unexpected defaults before
+advertisement. These receipts do not mark advertisement verified, and the
+requested publish tag alone does not establish actual distribution-tag state.
 
 ## Historical bootstrap procedure: 0.1.0
 

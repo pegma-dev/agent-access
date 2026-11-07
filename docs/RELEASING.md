@@ -7,7 +7,8 @@ is the `0.1.1` candidate for the first advertised trusted release. Maintainer
 2FA bootstrap of all five `0.1.0` packages, the four Knowledge Base packages
 and Agent Access, is complete with exact registry bytes confirmed and no OIDC
 provenance. The [bootstrap receipt](BOOTSTRAP.md#bootstrap-receipt-2026-11-07)
-records Agent Access's exact artifact identity. The canonical
+records both producers' exact artifact identities and timestamped manual
+postflight commands/results. The canonical
 [dated source evidence](PROJECT_PLAN.md#delivery-and-evidence) records the
 reviewed source heads, separate squash merge commits, exact primary CI runs,
 historical per-lane results, and review receipts. Those observations do not
@@ -80,8 +81,11 @@ commit. The checkout must be clean, at that commit, in
 `origin/main`. Signature verification uses independently approved signer
 configuration. Lightweight tags and unmerged commits fail the gate.
 
-After the full gate, prepare from that exact clean checkout. This example uses
-the current source version; substitute the full approved commit SHA:
+After the full gate, prepare from that exact clean checkout. In the current
+release commands below, replace `vX.Y.Z` with the approved signed tag matching
+the package version and `FULL_COMMIT_SHA` with its full approved source commit.
+Use the same tag and commit throughout preparation, preflight, publication,
+and verification. The historical bootstrap procedures retain literal `v0.1.0`.
 
 Strict `prepare` requires both `RELEASE_NPM_CLI` and
 `RELEASE_NPM_VERSION=11.18.0`. The CLI path must be canonical, absolute, and name
@@ -92,7 +96,7 @@ both variables before standalone preparation. The workflow configures them
 automatically. Development `check` and `pack` continue to use ambient npm.
 
 ```sh
-node scripts/release-packages.mjs prepare --tag v0.1.1 --expected-commit FULL_COMMIT_SHA
+node scripts/release-packages.mjs prepare --tag vX.Y.Z --expected-commit FULL_COMMIT_SHA
 ```
 
 An optional `--out EMPTY_DIRECTORY` selects a new empty output directory.
@@ -135,18 +139,21 @@ registry bytes and cryptographic signatures/provenance, then imports the public
 package. It uses the same immutable artifact ID and independent digest.
 No `setup-node` registry configuration or npm token fallback is used.
 
+### External release checklist
+
 Before trusted publication, verify these external maintainer settings:
 
 - npm ownership and organization publishing permission for
   `@pegma/agent-access`;
-- protected `origin/main`, immutable release tags, and approved SSH signer
-  entries in the reviewed `RELEASE_ALLOWED_SIGNERS` repository variable;
+- protected `origin/main`, immutable protected signed annotated release tags,
+  and approved SSH signer entries in the reviewed `RELEASE_ALLOWED_SIGNERS`
+  repository variable;
 - the GitHub `npm-publish` environment with required approval and release-ref
   restrictions;
 - the npm trusted publisher bound to `pegma-dev/agent-access`, `publish.yml`,
   and `npm-publish`, with explicit permission for direct `npm publish`;
-- restrictions disallowing token-based publication. No repository npm token or
-  token fallback exists.
+- npm publication policy requiring 2FA and disallowing token-based publication.
+  No repository npm token or token fallback exists.
 
 The workflow uses Node `24.18.0` and npm `11.18.0` for release operations. It
 uses the local [npm setup action](../.github/actions/setup-release-npm/action.yml)
@@ -161,7 +168,7 @@ not configure or prove those external settings.
 Read-only preflight inspects the exact candidate before publication:
 
 ```sh
-node scripts/release-packages.mjs preflight --prepared-dir PREPARED_DIRECTORY --manifest-sha256 INDEPENDENT_SHA256 --tag v0.1.1 --expected-commit FULL_COMMIT_SHA
+node scripts/release-packages.mjs preflight --prepared-dir PREPARED_DIRECTORY --manifest-sha256 INDEPENDENT_SHA256 --tag vX.Y.Z --expected-commit FULL_COMMIT_SHA
 ```
 
 It validates the schema-2 artifact and queries the exact version in the public
