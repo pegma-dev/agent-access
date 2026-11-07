@@ -151,7 +151,6 @@ async function json(path) {
 const rootDirectory = root;
 const PACKAGE = RELEASE_PACKAGES[0];
 const REPOSITORY_URL = "git+https://github.com/pegma-dev/agent-access.git";
-const RUNTIME_DEPENDENCIES = releaseDependencies(PACKAGE.directory, "0.1.0");
 const REVIEWED_PNPM_VERSION = "10.34.5";
 const STABLE_SEMVER = STABLE_VERSION;
 
@@ -221,7 +220,10 @@ export async function validateRepository(options = {}) {
   ) {
     fail(`${PACKAGE.name} has invalid public package metadata`);
   }
-  assert.deepEqual(manifest.dependencies, RUNTIME_DEPENDENCIES);
+  assert.deepEqual(
+    manifest.dependencies,
+    releaseDependencies(PACKAGE.directory, manifest.version),
+  );
   for (const kind of [
     "peerDependencies",
     "optionalDependencies",

@@ -1,6 +1,6 @@
 {
   "name": "@pegma/agent-access",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Scoped, administrator-approved OAuth credentials for Pegma hosts.",
   "license": "MIT",
   "type": "module",

@@ -18,9 +18,13 @@ reading, draft writing, and test-evidence submission. Future capabilities
 require explicit registration and fresh consent; changing the registry cannot
 silently widen an existing grant.
 
-As of 2026-11-07, all five new packages, the four Knowledge Base packages and
-`@pegma/agent-access`, remain unpublished at source version `0.1.0`. AUTH-01
-source, official SDK proof, and the separate release preparation are merged;
+As of 2026-11-07, the source is the `@pegma/agent-access@0.1.1` candidate for
+the first advertised trusted release. Maintainer 2FA bootstrap of all five
+`0.1.0` packages, the four Knowledge Base packages and Agent Access, is complete
+with exact registry bytes confirmed and no OIDC provenance. The
+[bootstrap receipt](docs/BOOTSTRAP.md#bootstrap-receipt-2026-11-07) records the
+Agent Access artifact identity and distribution-tag verification requirement.
+AUTH-01 source, official SDK proof, and the separate release preparation are merged;
 the [dated source evidence](docs/PROJECT_PLAN.md#delivery-and-evidence) records
 the reviewed heads, squash merges, primary CI, and historical per-lane results.
 The governing [Knowledge/AI plan](https://github.com/pegma-dev/support-desk/blob/main/docs/KNOWLEDGE_AI_PLAN.md)
@@ -37,14 +41,17 @@ Read the [architecture](docs/ARCHITECTURE.md), [API](docs/API.md), and
 [project plan](docs/PROJECT_PLAN.md) distinguishes source work from host gates;
 [release operations](docs/RELEASING.md) describes the separate first publication
 and later trusted-publisher path. The [maintainer bootstrap handoff](docs/BOOTSTRAP.md)
-keeps the initial 2FA-published `bootstrap` version unadvertised. The first
-advertised version needs a separate reviewed change and successful registry
+records the initial 2FA publication under the requested `bootstrap` tag. Operators
+must verify actual distribution tags and investigate unexpected defaults.
+The `0.1.1` candidate still needs fresh gates and review, verified publisher
+configuration, an approved signed tag and release, and successful exact registry
 consumer and trusted-provenance verification. Release preparation preserves
 exact tarball bytes, an independently retained manifest digest, and the
-verified signed-tag identity. Maintainer bootstrap and external protection,
-signer, environment, and trusted-publisher/direct-publish configuration remain
-pending. SD-02 requires published Knowledge Base dependencies; real host
-assembly requires published dependencies from both components. Merged source
+verified signed-tag identity. External protection, signer, environment, and
+trusted-publisher/direct-publish configuration remain maintainer gates.
+Knowledge Base's advertised release waits for verified Agent Access `0.1.1`.
+SD-02 requires verified advertised Knowledge Base dependencies; real host
+assembly requires verified advertised dependencies from both components. Merged source
 and release preparation authorize no tags, releases, publication,
 configuration, or deployment; manual workflow dispatch prepares only.
 
