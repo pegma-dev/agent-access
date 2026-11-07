@@ -51,6 +51,34 @@ Work on a `claude/*` branch from fetched `origin/main`. Required gates are
 when present. Current-head code/security review must finish clean; never
 bypass missing, skipped, pending, or failing gates. Use squash PR merges.
 
+`pnpm test` includes the explicit `test:release` Node test files for release
+identity, arguments, manifest integrity, fresh outputs, and registry failure and
+recovery cases. Both Node lanes must execute them. The original AUTH-01 source
+result is historical evidence; changed release source requires current-head
+validation and review.
+
+Strict release preparation requires a clean checkout at an approved SSH-signed
+annotated `vX.Y.Z` tag matching the package version, exact event commit, and
+protected `origin/main` ancestry. Verify that identity before executing release
+source. The schema-2 manifest binds the sole `@pegma/agent-access` tarball;
+retain its SHA-256 independently of the uploaded immutable artifact. Publish
+only that artifact ID with the independent digest, tag, and expected commit.
+The protected `npm-publish` job receives OIDC only for exact-byte publication;
+it installs no project dependencies, rebuilds no package, runs no consumer, and
+has no token fallback. A separate unprivileged job checks registry bytes,
+signatures, source-bound provenance, and a clean exact-version consumer with
+scripts disabled. Manual workflow dispatch prepares only.
+
+See [release operations](docs/RELEASING.md) and the
+[first-publication handoff](docs/BOOTSTRAP.md). The source remains unpublished
+at `0.1.0`. Maintainer 2FA bootstrap creates the name under `bootstrap` without
+advertising it; a later separately reviewed version must pass trusted
+publication and verification before advertisement. This source change chooses
+no future version. Package ownership, approved signers, immutable tag rules,
+environment approval, and direct-publish trusted-publisher settings remain
+external maintainer gates. Source, SDK, registry, and provenance results do not
+close actual existing-login/Admin-consent or per-client two-host acceptance.
+
 The user explicitly requests parallel in-harness subagents. Assign exact file
 ownership, tell workers they are not alone, and never revert others' edits.
 The orchestrator owns installs, builds/tests, Git, PRs, review replies, and

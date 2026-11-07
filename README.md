@@ -19,7 +19,7 @@ require explicit registration and fresh consent; changing the registry cannot
 silently widen an existing grant.
 
 The source package is `@pegma/agent-access@0.1.0`, currently unpublished.
-Implementation and verification are in progress under AUTH-01 in the governing
+AUTH-01 source work is tracked in the governing
 [Knowledge/AI plan](https://github.com/pegma-dev/support-desk/blob/main/docs/KNOWLEDGE_AI_PLAN.md).
 Source tests and a synthetic client example do not establish real host login,
 two-host client acceptance, publication, or deployment.
@@ -33,6 +33,12 @@ Read the [architecture](docs/ARCHITECTURE.md), [API](docs/API.md), and
 [HTTP composition](docs/HTTP.md) before wiring a host. The
 [project plan](docs/PROJECT_PLAN.md) distinguishes source work from host gates;
 [release operations](docs/RELEASING.md) describes the separate first publication
-and later trusted-publisher path.
+and later trusted-publisher path. The [maintainer bootstrap handoff](docs/BOOTSTRAP.md)
+keeps the initial 2FA-published `bootstrap` version unadvertised. The first
+advertised version needs a separate reviewed change and successful registry
+consumer and trusted-provenance verification. Release preparation preserves
+exact tarball bytes, an independently retained manifest digest, and the
+verified signed-tag identity. Merging source and manual workflow dispatch do
+not publish.
 
 Built in the open by RetireGolden, LLC. MIT licensed.
