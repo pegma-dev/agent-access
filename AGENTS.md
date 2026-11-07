@@ -70,18 +70,22 @@ signatures, source-bound provenance, and a clean exact-version consumer with
 scripts disabled. Manual workflow dispatch prepares only.
 
 See [release operations](docs/RELEASING.md) and the
-[first-publication handoff](docs/BOOTSTRAP.md). The source remains unpublished
-at `0.1.0`. Maintainer 2FA bootstrap creates the name under `bootstrap` without
-advertising it; a later separately reviewed version must pass trusted
-publication and verification before advertisement. This source change chooses
-no future version. Package ownership, approved signers, immutable tag rules,
-environment approval, and direct-publish trusted-publisher settings remain
-external maintainer gates. Source, SDK, registry, and provenance results do not
-close actual existing-login/Admin-consent or per-client two-host acceptance.
+[first-publication handoff](docs/BOOTSTRAP.md). The source is the `0.1.1`
+candidate for the first advertised trusted release. Maintainer 2FA bootstrap of
+`0.1.0` is complete with exact registry bytes confirmed; it supplies no OIDC
+provenance. Verify actual npm distribution tags after bootstrap and investigate
+unexpected defaults; the publish tag argument alone does not prove their state.
+The candidate still requires fresh current-head gates and review, verified
+publisher configuration, an approved signed tag and release, and strict registry
+and provenance verification before advertisement. Package ownership, approved
+signers, immutable tag rules, environment approval, and direct-publish
+trusted-publisher settings remain external maintainer gates. Source, SDK,
+registry, and provenance results do not close actual existing-login/Admin-consent
+or per-client two-host acceptance.
 
 The user explicitly requests parallel in-harness subagents. Assign exact file
 ownership, tell workers they are not alone, and never revert others' edits.
 The orchestrator owns installs, builds/tests, Git, PRs, review replies, and
-merges. First publication/trusted-publisher configuration and host activation
-remain separate maintainer operations; no tag, release, publish or deployment
-is authorized by source validation alone.
+merges. Trusted publication, publisher configuration, and host activation remain
+separate maintainer operations; no tag, release, publish or deployment is
+authorized by source validation alone.

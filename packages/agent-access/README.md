@@ -1,8 +1,6 @@
 # @pegma/agent-access
 
-Administrator-approved, scoped OAuth credentials for Pegma hosts. The initial
-`0.1.0` source is unpublished. Completing validation does not activate a host
-integration or publish this package.
+Administrator-approved, scoped OAuth credentials for Pegma hosts.
 
 Agent Access supports public-client device authorization and authorization-code
 grants with mandatory S256 PKCE. It owns consent snapshots, opaque access
@@ -23,5 +21,16 @@ It supplies no framework, login system, session store, database, or limiter.
 Refresh families and physical work are bounded; reaching a family limit requires
 relinking. The repository's fictional protocol example documents the host trust
 seam and exercises the public entrypoint.
+
+Use `createAgentAccess` with a Storage Core store, clock, current principal
+resolver, and explicit client/resource/scope configuration. Compose protocol
+routes with `createAgentAccessHttp` and protect resource handlers with
+`createProtectedResourceAuthenticator`, using its returned restricted access
+context for the actual operation. Keep browser approval and its CSRF/origin
+checks in the host.
+
+Actual existing-login/Admin-consent integration and per-client acceptance remain
+open for each host. The fictional protocol example does not establish those
+results.
 
 MIT licensed. Built in the open by RetireGolden, LLC.
