@@ -20,14 +20,14 @@ const manifestSha256 = "b".repeat(64);
 test("existing check and pack commands accept no publication options", () => {
   for (const command of ["check", "pack"]) {
     assert.deepEqual(parseArguments([command]), { command, options: {} });
-    assert.throws(() => parseArguments([command, "--tag", "v0.1.0"]));
+    assert.throws(() => parseArguments([command, "--tag", "v0.2.0"]));
   }
 });
 
 test("prepare requires an exact stable tag and independent commit before any work", () => {
   assert.deepEqual(
-    parseArguments(["prepare", "--tag", "v0.1.0", "--expected-commit", commit]),
-    { command: "prepare", options: { tag: "v0.1.0", expectedCommit: commit } },
+    parseArguments(["prepare", "--tag", "v0.2.0", "--expected-commit", commit]),
+    { command: "prepare", options: { tag: "v0.2.0", expectedCommit: commit } },
   );
   assert.deepEqual(
     parseArguments([
@@ -60,7 +60,7 @@ test("preflight, publish, and verify require the same prepared artifact identity
         "--manifest-sha256",
         manifestSha256,
         "--tag",
-        "v0.1.0",
+        "v0.2.0",
         "--expected-commit",
         commit,
       ]),
@@ -69,7 +69,7 @@ test("preflight, publish, and verify require the same prepared artifact identity
         options: {
           preparedDir: "synthetic/prepared",
           expectedManifestSha256: manifestSha256,
-          expectedTag: "v0.1.0",
+          expectedTag: "v0.2.0",
           expectedCommit: commit,
         },
       },
@@ -78,7 +78,7 @@ test("preflight, publish, and verify require the same prepared artifact identity
 });
 
 test("missing, duplicate, unknown, malformed, and credential options fail closed", () => {
-  const prepare = ["prepare", "--tag", "v0.1.0", "--expected-commit", commit];
+  const prepare = ["prepare", "--tag", "v0.2.0", "--expected-commit", commit];
   const publish = [
     "publish",
     "--prepared-dir",
@@ -86,7 +86,7 @@ test("missing, duplicate, unknown, malformed, and credential options fail closed
     "--manifest-sha256",
     manifestSha256,
     "--tag",
-    "v0.1.0",
+    "v0.2.0",
     "--expected-commit",
     commit,
   ];
@@ -94,13 +94,13 @@ test("missing, duplicate, unknown, malformed, and credential options fail closed
     [],
     ["unknown"],
     ["prepare"],
-    ["prepare", "--tag", "v0.1.0"],
+    ["prepare", "--tag", "v0.2.0"],
     ["prepare", "--expected-commit", commit],
-    ["prepare", "--tag", "v0.1.0-rc.1", "--expected-commit", commit],
-    ["prepare", "--tag", "0.1.0", "--expected-commit", commit],
+    ["prepare", "--tag", "v0.2.0-rc.1", "--expected-commit", commit],
+    ["prepare", "--tag", "0.2.0", "--expected-commit", commit],
     ["prepare", "--tag", "v01.1.0", "--expected-commit", commit],
-    ["prepare", "--tag", "v0.1.0", "--expected-commit", "HEAD"],
-    [...prepare, "--tag", "v0.1.0"],
+    ["prepare", "--tag", "v0.2.0", "--expected-commit", "HEAD"],
+    [...prepare, "--tag", "v0.2.0"],
     [...prepare, "--out"],
     [...prepare, "--out", ""],
     [...prepare, "--out", "--tag"],
@@ -122,7 +122,7 @@ test("missing, duplicate, unknown, malformed, and credential options fail closed
       "--manifest-sha256",
       "B".repeat(64),
       "--tag",
-      "v0.1.0",
+      "v0.2.0",
       "--expected-commit",
       commit,
     ],

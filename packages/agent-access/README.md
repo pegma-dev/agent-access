@@ -2,6 +2,12 @@
 
 Administrator-approved, scoped OAuth credentials for Pegma hosts.
 
+Install the 0.2.0 candidate after its release has been verified:
+
+```sh
+pnpm add @pegma/agent-access@0.2.0
+```
+
 Agent Access supports public-client device authorization and authorization-code
 grants with mandatory S256 PKCE. It owns consent snapshots, opaque access
 credentials, rotating refresh families, revocation, discovery, and protocol
@@ -35,10 +41,19 @@ Pages are owner-only, bounded (default 20, maximum 100), and continue with an
 owner-bound opaque cursor. Each item is the same safe `GrantView` that
 `getGrant` returns, including its current status, and can be revoked with
 `revokeGrant`. Grants approved before listing existed appear after the host
-runs the bounded, idempotent `backfillGrantIndex` maintenance call.
+runs the bounded, idempotent `backfillGrantIndex({ cursor, limit })` maintenance
+call. On upgrade to 0.2.0, run it once to completion, passing `nextCursor` to the
+next call until it is null (default 100 physical grant rows per call, maximum
+1000). Hosts that explicitly provision storage collections or roles must first
+provision `agent-access.owner-index.v1` with the same read/write/transaction
+rights as `agent-access.records.v1`. The owner index is maintained by the
+package in a separate collection; it has no cross-partition atomicity with
+grant records.
 
 File-upload endpoints may opt in to multipart bodies per authenticator with
 `createProtectedResourceAuthenticator({ service, configuration, multipart: { maxBytes } })`.
+`maxBytes` defaults to 1 MiB (1048576 bytes) and must be a positive integer no
+greater than 16 MiB (16777216 bytes). Multipart remains off by default.
 The bearer still comes only from the `Authorization` header. The body is bounded
 before and during streaming, parsed from a clone so the original request stays
 readable on success, rejected (with the upload source cancelled) when any part

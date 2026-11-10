@@ -4,10 +4,11 @@
 
 The maintainer owns npm publication and external configuration. As of
 2026-11-07, `@pegma/agent-access@0.1.0` has completed maintainer 2FA bootstrap
-with exact registry bytes confirmed and no OIDC provenance. Source version
-`0.1.1` is the candidate for the first advertised trusted release; that release
-is not yet verified. Knowledge Base has its own release handoff and waits for
-verified Agent Access `0.1.1` before its advertised release.
+with exact registry bytes confirmed and no OIDC provenance. Version `0.1.1`
+is already published as npm `latest`, and its `v0.1.1` tag exists. Source version
+`0.2.0` is the new release candidate; its release is not yet verified.
+Knowledge Base has its own release handoff and waits for
+verified Agent Access `0.2.0` before its advertised release.
 
 Creating the package name and advertising the first trusted release are
 separate steps. Maintainer 2FA publication supplies no OIDC provenance and
@@ -79,7 +80,7 @@ requested publish tag alone does not establish actual distribution-tag state.
 
 The following procedure records the completed first publication. Do not
 recreate or move its tag, rebuild its artifact, or republish the immutable
-version. Use the separate trusted-release procedure for the `0.1.1` candidate.
+version. Use the separate trusted-release procedure for the `0.2.0` candidate.
 
 1. Confirm npm ownership and publishing permission for `@pegma/agent-access`.
    Record the responsible maintainer and keep credentials and one-time codes
@@ -141,7 +142,7 @@ before advertisement. Do not infer actual tag state from `--tag bootstrap`.
 Do not advertise `0.1.0` as the trusted production dependency or authorize host
 installation from it.
 
-## First advertised trusted release
+## Next trusted release
 
 Once the name exists, the maintainer configures its trusted publisher, the
 protected `npm-publish` environment, approved signers, and immutable tag
@@ -150,8 +151,8 @@ to `pegma-dev/agent-access`, exact workflow `publish.yml`, and environment
 `npm-publish`; explicitly permit direct publishing. Check npm's first-use
 timing before configuring it for the reviewed trusted release.
 
-The `0.1.1` candidate proposes the package-version change for the first
-advertised release; dependent pins must be synchronized across consumers.
+The `0.2.0` candidate adds owner-scoped grant listing, the owner index, and
+opt-in multipart bearer transport; dependent pins must be synchronized across consumers.
 It still requires fresh current-head code/security review and the full Node
 22/24 gate. A manually published version cannot be republished through OIDC to
 acquire provenance. After the candidate's gates pass and external publisher
@@ -166,6 +167,6 @@ job succeeds: registry bytes/dependencies, a clean exact-version registry
 consumer, registry signatures, and matching source/workflow/tag/commit
 provenance. Preserve that result with the release identity and independent
 manifest digest. Knowledge Base's advertised release follows verified Agent
-Access `0.1.1`. Both hosts additionally require verified advertised Knowledge Base
+Access `0.2.0`. Both hosts additionally require verified advertised Knowledge Base
 and their retained actual login/Admin-consent/client/staging acceptance before
 activation. Registry publication closes none of those host gates.

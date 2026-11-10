@@ -71,10 +71,10 @@ test("manifest digest and expected source identity come from independent trusted
     { expectedManifestSha256: undefined },
     { expectedManifestSha256: "0".repeat(64) },
     { expectedManifestSha256: fixture.written.manifestSha256.toUpperCase() },
-    { expectedTag: "v0.2.0" },
+    { expectedTag: "v0.3.0" },
     { expectedCommit: "b".repeat(40) },
     { expectedCommit: "HEAD" },
-    { expectedVersion: "0.2.0" },
+    { expectedVersion: "0.3.0" },
   ]) {
     await assert.rejects(
       verifyPreparedManifest({ ...fixture.options, ...overrides }),
@@ -191,13 +191,13 @@ test("recomputed manifest hashes cannot authorize altered package sets, order, p
     [
       "wrong package version",
       (manifest) => {
-        manifest.artifacts[0].version = "0.2.0";
+        manifest.artifacts[0].version = "0.3.0";
       },
     ],
     [
       "prerelease",
       (manifest) => {
-        manifest.identity.version = "0.1.0-rc.1";
+        manifest.identity.version = "0.2.0-rc.1";
       },
     ],
     [
@@ -215,7 +215,7 @@ test("recomputed manifest hashes cannot authorize altered package sets, order, p
     [
       "different release tag",
       (manifest) => {
-        manifest.identity.tag = "v0.2.0";
+        manifest.identity.tag = "v0.3.0";
       },
     ],
     [

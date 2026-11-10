@@ -2,8 +2,9 @@
 
 ## Status and release boundary
 
-This repository releases only `@pegma/agent-access`. As of 2026-11-07, its source
-is the `0.1.1` candidate for the first advertised trusted release. Maintainer
+This repository releases only `@pegma/agent-access`. Its source is the `0.2.0`
+release candidate. Version `0.1.1` is already published as npm `latest`, and
+`v0.1.1` exists; do not reuse that version or tag. Maintainer
 2FA bootstrap of all five `0.1.0` packages, the four Knowledge Base packages
 and Agent Access, is complete with exact registry bytes confirmed and no OIDC
 provenance. The [bootstrap receipt](BOOTSTRAP.md#bootstrap-receipt-2026-11-07)
@@ -14,7 +15,7 @@ reviewed source heads, separate squash merge commits, exact primary CI runs,
 historical per-lane results, and review receipts. Those observations do not
 replace any current-head review, validation, or release preflight below.
 
-The `0.1.1` candidate still requires fresh current-head gates and review,
+The `0.2.0` candidate still requires fresh current-head gates and review,
 verified release protection and publisher configuration, an approved signed tag
 and release, and strict exact-version registry/provenance verification.
 Operators must verify actual npm distribution tags after bootstrap and
@@ -25,7 +26,7 @@ GitHub releases, publication, external configuration, or deployment. Follow the
 remaining trusted-release gates.
 
 Knowledge Base retains its own release process; its advertised release waits
-for verified Agent Access `0.1.1`. SD-02 requires verified advertised Knowledge
+for verified Agent Access `0.2.0`. SD-02 requires verified advertised Knowledge
 Base dependencies. Production host assembly requires exact verified advertised
 dependencies from both components. Source tests, local adapter conformance, and the official SDK
 protocol fixture establish source behavior; they do not establish real host
@@ -64,7 +65,11 @@ released dependencies, and imports the public package.
 The runtime pins remain `@pegma/audit@0.2.0`,
 `@pegma/authorization-core@0.4.0`, `@pegma/spine@0.1.2`, and
 `@pegma/storage-core@0.4.0`. This candidate changes the package version to
-`0.1.1` without changing runtime scope or dependency pins.
+`0.2.0` for the additive owner-scoped grant-listing API, package-maintained
+owner index, and opt-in multipart bearer transport, without changing dependency
+pins. Hosts with pre-0.2.0 grants must run `backfillGrantIndex` as a one-time
+upgrade step; multipart remains
+off by default. See the [changelog](../CHANGELOG.md).
 `pnpm run release:pack` preserves development artifacts and a schema-1 manifest
 in a new `.release/agent-access-*` directory. It requires no tag and supplies no
 release identity or provenance. Publication rejects that development manifest;

@@ -18,8 +18,10 @@ reading, draft writing, and test-evidence submission. Future capabilities
 require explicit registration and fresh consent; changing the registry cannot
 silently widen an existing grant.
 
-As of 2026-11-07, the source is the `@pegma/agent-access@0.1.1` candidate for
-the first advertised trusted release. Maintainer 2FA bootstrap of all five
+The source is the `@pegma/agent-access@0.2.0` release candidate.
+`@pegma/agent-access@0.1.1` is already published as npm `latest`, and its
+`v0.1.1` tag exists; this does not establish provenance for the new candidate.
+Maintainer 2FA bootstrap of all five
 `0.1.0` packages, the four Knowledge Base packages and Agent Access, is complete
 with exact registry bytes confirmed and no OIDC provenance. The
 [bootstrap receipt](docs/BOOTSTRAP.md#bootstrap-receipt-2026-11-07) records the
@@ -41,7 +43,9 @@ paginated `listGrants` ([owner grant listing](docs/API.md#owner-grant-listing))
 and can opt individual protected-resource authenticators in to bounded
 multipart uploads with header-only bearer credentials
 ([opt-in multipart uploads](docs/HTTP.md#opt-in-multipart-uploads)). Both are
-unreleased source additions and change no package version.
+additions in the `0.2.0` candidate. Hosts upgrading grants created before 0.2.0 must run
+the bounded `backfillGrantIndex` maintenance call as a one-time upgrade step; multipart remains off by default.
+See the [changelog](CHANGELOG.md) for the upgrade notes.
 
 Read the [architecture](docs/ARCHITECTURE.md), [API](docs/API.md), and
 [HTTP composition](docs/HTTP.md) before wiring a host. The
@@ -50,13 +54,13 @@ Read the [architecture](docs/ARCHITECTURE.md), [API](docs/API.md), and
 and later trusted-publisher path. The [maintainer bootstrap handoff](docs/BOOTSTRAP.md)
 records the initial 2FA publication under the requested `bootstrap` tag. Operators
 must verify actual distribution tags and investigate unexpected defaults.
-The `0.1.1` candidate still needs fresh gates and review, verified publisher
+The `0.2.0` candidate still needs fresh gates and review, verified publisher
 configuration, an approved signed tag and release, and successful exact registry
 consumer and trusted-provenance verification. Release preparation preserves
 exact tarball bytes, an independently retained manifest digest, and the
 verified signed-tag identity. External protection, signer, environment, and
 trusted-publisher/direct-publish configuration remain maintainer gates.
-Knowledge Base's advertised release waits for verified Agent Access `0.1.1`.
+Knowledge Base's advertised release waits for verified Agent Access `0.2.0`.
 SD-02 requires verified advertised Knowledge Base dependencies; real host
 assembly requires verified advertised dependencies from both components. Merged source
 and release preparation authorize no tags, releases, publication,

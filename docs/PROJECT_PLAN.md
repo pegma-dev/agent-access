@@ -4,7 +4,9 @@ AUTH-01 is the scoped-credential prerequisite inserted before KB-04 in the
 [Knowledge/AI plan](https://github.com/pegma-dev/support-desk/blob/main/docs/KNOWLEDGE_AI_PLAN.md).
 This repository owns reusable authorization-server source; Knowledge Base
 continues to own content and resource operations. The current source is the
-`@pegma/agent-access@0.1.1` candidate for the first advertised trusted release.
+`@pegma/agent-access@0.2.0` release candidate. Version `0.1.1` is already
+published as npm `latest`, and its `v0.1.1` tag exists. The additive owner-scoped
+grant API, owner index, and opt-in multipart transport require the new minor version.
 AUTH-01 source and the original release preparation are merged. As of
 2026-11-07, maintainer 2FA bootstrap of all five `0.1.0` packages, the four
 Knowledge Base packages and Agent Access, is complete with exact registry bytes
@@ -33,7 +35,7 @@ distinct from the recorded squash merge commits. They are not fixed test-count
 requirements or publication guards. The
 [2026-11-07 bootstrap receipt](BOOTSTRAP.md#bootstrap-receipt-2026-11-07)
 records completion of all five `0.1.0` uploads and exact-byte confirmation,
-without OIDC provenance. The `0.1.1` candidate still needs fresh current-head
+without OIDC provenance. The `0.2.0` candidate still needs fresh current-head
 review, validation, publisher configuration, a signed tag and release, and
 strict registry/provenance verification in [release operations](RELEASING.md).
 
@@ -44,7 +46,7 @@ strict registry/provenance verification in [release operations](RELEASING.md).
 | KB-04 transport source exit           | Reviewed head [c897626](https://github.com/pegma-dev/knowledge-base/commit/c897626de6c7b2ea574f4154b0bc7a7731ee106e); [primary Node 22/24 CI](https://github.com/pegma-dev/knowledge-base/actions/runs/42390433045). 372 runtime tests and official SDK proof of all five initial tools.                                                                                                                                                     | Merged via [Knowledge Base #5](https://github.com/pegma-dev/knowledge-base/pull/5) as [b61fc77](https://github.com/pegma-dev/knowledge-base/commit/b61fc77aedd22e888ac7292c3597f93e54fcda8e); retained host acceptance open.         |
 | KB-05 release preparation             | Reviewed head [c8ef14a](https://github.com/pegma-dev/knowledge-base/commit/c8ef14af0ec32e3903b9399543b7a9f2e48df2f9); [primary Node 22/24 CI](https://github.com/pegma-dev/knowledge-base/actions/runs/42398508042). Each lane passed 372 runtime tests plus 128 release regressions (500 per lane), with zero skips. Packaging checks cover four KB packages; the packed protocol proof uses all five packages (four KB plus Agent Access). | Merged via [Knowledge Base #6](https://github.com/pegma-dev/knowledge-base/pull/6) as [7f5eee6](https://github.com/pegma-dev/knowledge-base/commit/7f5eee68be692b5489de3965f3f5ede7ef7a812d); historical release-preparation source. |
 | First-publication bootstrap           | Maintainer 2FA uploads of all five `0.1.0` packages (four KB plus Agent Access) were accepted; exact registry bytes match the prepared artifacts. See the [bootstrap receipt](BOOTSTRAP.md#bootstrap-receipt-2026-11-07).                                                                                                                                                                                                                    | Complete; OIDC provenance absent. Operators must verify distribution tags and investigate unexpected defaults.                                                                                                                       |
-| First advertised publication          | Agent Access `0.1.1` requires [full current-head Node 22/24 CI and code/security review](RELEASING.md#repository-and-development-artifact-gates), the [external release checklist](RELEASING.md#external-release-checklist), an approved signed tag and release, and [strict exact-version registry/provenance verification](RELEASING.md#registry-verification-and-availability).                                                           | Pending. Knowledge Base advertisement waits for verified Agent Access `0.1.1`.                                                                                                                                                       |
+| Next trusted publication              | Agent Access `0.2.0` requires [full current-head Node 22/24 CI and code/security review](RELEASING.md#repository-and-development-artifact-gates), the [external release checklist](RELEASING.md#external-release-checklist), an approved signed tag and release, and [strict exact-version registry/provenance verification](RELEASING.md#registry-verification-and-availability).                                                           | Pending. Knowledge Base advertisement waits for verified Agent Access `0.2.0`.                                                                                                                                                       |
 | SD-02 AI coordinator                  | Requires verified advertised Knowledge Base dependencies.                                                                                                                                                                                                                                                                                                                                                                                    | Pending.                                                                                                                                                                                                                             |
 | Retained host acceptance              | PG-01/RG-01 require exact verified advertised Agent Access and Knowledge Base dependencies, real existing-login/current-Admin consent, and actual per-client protected API/MCP, credential-failure, and exact-revision evidence-attestation proof on both hosts.                                                                                                                                                                             | Pending; required before activation/A-01/pilots.                                                                                                                                                                                     |
 
@@ -78,9 +80,9 @@ clients or unsupported flows remain explicit host acceptance gaps.
 
 The source prerequisites, original release preparation, and `0.1.0` bootstrap
 are complete. The remaining sequence is fresh review and gates for Agent Access
-`0.1.1`, verified external publisher configuration, its approved signed tag and
+`0.2.0`, verified external publisher configuration, its approved signed tag and
 release, and strict registry/provenance verification before advertisement.
-Knowledge Base's advertised release waits for verified Agent Access `0.1.1`.
+Knowledge Base's advertised release waits for verified Agent Access `0.2.0`.
 SD-02 follows verified advertised Knowledge Base dependencies; PG-01/RG-01 host
 assembly follows verified advertised dependencies from both components.
 Real existing-login/current-Admin consent and actual-client proof then remain
