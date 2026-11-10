@@ -1,11 +1,13 @@
 # Changelog
 
-## 0.2.0 - Unreleased
+## 0.2.0
 
-- Add `listGrants(browserContext, { ownerPrincipal, cursor, limit })` for
+- Add `listGrants(browserContext, { ownerPrincipal, cursor?, limit?, statuses? })` for
   owner-scoped grant discovery. Pages return safe grant views, default to 20
   entries, allow at most 100 entries, and use owner-bound opaque cursors. Each
-  call rechecks the trusted browser session and current owner authority.
+  call rechecks the trusted browser session and current owner authority. The optional
+  `statuses` filter accepts `pending`, `active`, `revoked`, and `expired`; filtering
+  can return fewer items than the page limit while a continuation cursor remains.
 - Maintain the new `agent-access.owner-index.v1` Storage Core collection during
   approval. The owner index uses a separate partition from each grant; listing
   re-reads authoritative grant heads and claims no cross-partition atomicity.

@@ -16,6 +16,29 @@ cannot substitute for strict `verify` in [release operations](RELEASING.md).
 The historical AUTH-01 source result does not replace this change's required
 current-head code/security review and Node 22/24 gate.
 
+## Observed 0.1.1 publication pointers: 2026-11-10
+
+Read-only checks on 2026-11-10 found the existing
+[0.1.1 GitHub release](https://github.com/pegma-dev/agent-access/releases/tag/v0.1.1)
+and its linked [Publish run](https://github.com/pegma-dev/agent-access/actions/runs/42420302775).
+GitHub reports that release-triggered run completed successfully, including
+signed-identity validation, both Node release gates, preparation, exact-artifact
+publication, and the separate registry-release/consumer verification job.
+The npm registry reports version `0.1.1`, with `latest=0.1.1` and
+`bootstrap=0.1.0`. Recheck mutable distribution tags before relying on them:
+
+```sh
+npm view @pegma/agent-access@0.1.1 version dist-tags --json --registry https://registry.npmjs.org
+gh api repos/pegma-dev/agent-access/releases/tags/v0.1.1
+gh api repos/pegma-dev/agent-access/actions/runs/42420302775
+gh api repos/pegma-dev/agent-access/actions/runs/42420302775/jobs
+```
+
+These are pointers to observed public metadata, not a reconstructed publication
+receipt. This repository does not retain a 0.1.1 artifact ID or independently
+recorded manifest digest here; this check did not download or re-verify registry
+bytes, signatures, or provenance. It supplies no release evidence for 0.2.0.
+
 ## Bootstrap receipt: 2026-11-07
 
 The operator manually reran the post-publication preflight commands below at

@@ -2,10 +2,11 @@
 
 Administrator-approved, scoped OAuth credentials for Pegma hosts.
 
-Install the 0.2.0 candidate after its release has been verified:
+Install an exact version after verifying its release. Replace `<verified-version>`
+with that version:
 
 ```sh
-pnpm add @pegma/agent-access@0.2.0
+pnpm add --save-exact @pegma/agent-access@<verified-version>
 ```
 
 Agent Access supports public-client device authorization and authorization-code
@@ -36,9 +37,11 @@ context for the actual operation. Keep browser approval and its CSRF/origin
 checks in the host.
 
 Hosts that render a connected-agents page list the signed-in owner's approved
-grants with `listGrants(browserContext, { ownerPrincipal, cursor, limit })`.
+grants with `listGrants(browserContext, { ownerPrincipal, cursor?, limit?, statuses? })`.
 Pages are owner-only, bounded (default 20, maximum 100), and continue with an
-owner-bound opaque cursor. Each item is the same safe `GrantView` that
+owner-bound opaque cursor. The optional `statuses` filter accepts `pending`,
+`active`, `revoked`, and `expired`; filtered pages can contain fewer items than
+the limit while still returning `nextCursor`. Each item is the same safe `GrantView` that
 `getGrant` returns, including its current status, and can be revoked with
 `revokeGrant`. Grants approved before listing existed appear after the host
 runs the bounded, idempotent `backfillGrantIndex({ cursor, limit })` maintenance

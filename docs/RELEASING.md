@@ -4,7 +4,9 @@
 
 This repository releases only `@pegma/agent-access`. Its source is the `0.2.0`
 release candidate. Version `0.1.1` is already published as npm `latest`, and
-`v0.1.1` exists; do not reuse that version or tag. Maintainer
+`v0.1.1` exists; do not reuse that version or tag. See the
+[dated public metadata pointers](BOOTSTRAP.md#observed-011-publication-pointers-2026-11-10)
+for the prior release and the limits of that observation. Maintainer
 2FA bootstrap of all five `0.1.0` packages, the four Knowledge Base packages
 and Agent Access, is complete with exact registry bytes confirmed and no OIDC
 provenance. The [bootstrap receipt](BOOTSTRAP.md#bootstrap-receipt-2026-11-07)
@@ -76,6 +78,11 @@ release identity or provenance. Publication rejects that development manifest;
 use strict `prepare` for a releasable artifact.
 
 ## Strict release preparation
+
+Before merging release source, ensure the changelog has a version-only heading
+for the target version (for example, `## 0.2.0`), with no `Unreleased` label.
+A publication date need not be predicted; retain actual publication timing in
+the release record after publication.
 
 Merge reviewed release source and exact version/pin changes to protected
 `origin/main` first. Configure immutable protected `v*` tags and approved SSH
