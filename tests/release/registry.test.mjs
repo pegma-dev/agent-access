@@ -139,11 +139,14 @@ function trustedEnvironment() {
 function publisher(fixture, state) {
   const calls = [];
   const sleeps = [];
+  let elapsed = 0;
   const seams = {
+    now: () => elapsed,
     env: trustedEnvironment(),
     fetch: state.fetch,
     sleep: async (milliseconds) => {
       sleeps.push(milliseconds);
+      elapsed += milliseconds;
     },
     run: async (command, arguments_, context) => {
       calls.push({ command, arguments_, context });
@@ -526,9 +529,35 @@ test("a matching version published concurrently is reverified and skipped immedi
   );
 });
 
+test("publication waits through npm scanning and verifies bytes without publishing twice", async (t) => {
+  const prepared = await fixture(t);
+  const state = fakeRegistry(prepared, []);
+  const publishing = publisher(prepared, state);
+  state.metadata = () =>
+    publishing.calls.some(({ arguments_ }) => arguments_[1] === "publish") &&
+    publishing.seams.now() < 16 * 60_000
+      ? jsonResponse({ error: "Not found" }, 404)
+      : undefined;
+  const result = await publishPreparedRelease(
+    prepared.options,
+    publishing.seams,
+  );
+  assert.deepEqual(
+    result.published,
+    prepared.artifacts.map(({ name }) => name),
+  );
+  assert.equal(publishing.sleeps.length, 32);
+  assert.equal(
+    publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+      .length,
+    1,
+  );
+  assert.ok(state.requests.some(({ kind }) => kind === "tarball"));
+});
+
 test("post-publication absence has a bounded retry budget and unknown states fail immediately", async (t) => {
-  for (const problem of ["404", "network"]) {
-    await t.test(problem, async (t) => {
+  for (const problem of ["404", "network", 401, 429, 503]) {
+    await t.test(String(problem), async (t) => {
       const prepared = await fixture(t);
       const state = fakeRegistry(prepared, []);
       let published = false;
@@ -543,6 +572,7 @@ test("post-publication absence has a bounded retry budget and unknown states fai
         if (!published) return undefined;
         if (problem === "network")
           throw new Error("synthetic unknown network state");
+        if (typeof problem === "number") return jsonResponse({}, problem);
         return jsonResponse({ error: "Not found" }, 404);
       };
       await assert.rejects(
@@ -555,10 +585,51 @@ test("post-publication absence has a bounded retry budget and unknown states fai
       );
       assert.deepEqual(
         publishing.sleeps,
-        problem === "404" ? [1000, 2000, 4000, 8000, 16000] : [],
+        problem === "404" ? Array(40).fill(30_000) : [],
       );
     });
   }
+});
+
+test("publication polling is bounded even when the clock does not advance", async (t) => {
+  const prepared = await fixture(t);
+  const state = fakeRegistry(prepared, []);
+  const publishing = publisher(prepared, state);
+  publishing.seams.now = () => 0;
+  state.metadata = () => jsonResponse({}, 404);
+  await assert.rejects(
+    publishPreparedRelease(prepared.options, publishing.seams),
+    /check npm scanning or review status/,
+  );
+  // Two pre-upload lookups, then at most 41 post-upload lookups.
+  assert.equal(state.requests.length, 43);
+  assert.equal(publishing.sleeps.length, 40);
+});
+
+test("publication polling counts lookup time toward its deadline", async (t) => {
+  const prepared = await fixture(t);
+  const state = fakeRegistry(prepared, []);
+  const publishing = publisher(prepared, state);
+  const originalNow = publishing.seams.now;
+  let lookupTime = 0;
+  let lookups = 0;
+  publishing.seams.now = () => originalNow() + lookupTime;
+  state.metadata = () => {
+    if (
+      publishing.calls.some(({ arguments_ }) => arguments_[1] === "publish")
+    ) {
+      lookupTime += 30_000;
+      lookups += 1;
+    }
+    return jsonResponse({}, 404);
+  };
+  await assert.rejects(
+    publishPreparedRelease(prepared.options, publishing.seams),
+    /check npm scanning or review status/,
+  );
+  assert.equal(publishing.seams.now(), 20 * 60_000);
+  assert.equal(lookups, 20);
+  assert.equal(publishing.sleeps.length, 20);
 });
 
 test("privileged publication requires the exact hosted release workflow identity and rejects inherited npm authority", () => {

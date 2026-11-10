@@ -597,18 +597,27 @@ async function registryConsumer(verified, options, seams) {
 }
 
 async function confirmRegistry(record, seams) {
+  // npm accepts uploads before its publish-time malware scan makes them public.
+  // Bound both elapsed time and physical lookups; never publish again while waiting.
+  const now = seams.now ?? Date.now;
+  const deadline = now() + 20 * 60_000;
   const sleep =
     seams.sleep ??
     ((milliseconds) =>
       new Promise((resolve_) => setTimeout(resolve_, milliseconds)));
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  for (let attempt = 0; attempt < 41; attempt += 1) {
+    if (attempt > 0 && now() >= deadline) break;
     if (
       (await registryRecord(record, seams.fetch ?? globalThis.fetch)) !== null
     )
       return;
-    if (attempt < 5) await sleep(2 ** attempt * 1000);
+    const remaining = deadline - now();
+    if (attempt === 40 || remaining <= 0) break;
+    await sleep(Math.min(30_000, remaining));
   }
-  fail("published registry version was not visible after bounded verification");
+  fail(
+    "npm accepted the upload but the exact registry version is not yet visible; preserve the artifact and check npm scanning or review status before retrying",
+  );
 }
 
 async function verifyPublishedBytes(verified, seams) {
