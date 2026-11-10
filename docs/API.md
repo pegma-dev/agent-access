@@ -268,9 +268,23 @@ an entry whose grant head is missing (removed by retention), owned by another
 principal, or never approved. Such entries arise only from host retention or
 from an approval that failed or lost its outcome after its write-ahead index
 commit, so they are rare, but each still occupies a slot on its page. A host
-maintenance job may prune them with bounded keyed work: read an owner's
-`entry:` row, read the referenced grant head, and when that head is missing,
-not owned by that principal, or lacks an approval, delete the `entry:` and
-matching `grant:` rows. Never delete an owner-index `head` row while the
-owner has entries, because the head orders new entries; a reset head makes
-later approvals for that owner fail closed.
+maintenance job may prune them with bounded keyed work, but must not race an
+approval: `approve` commits the index entry before the grant transition, so
+during that window the head is still `pending` and unowned or unapproved.
+Prune an entry only when the referenced head can no longer be approved:
+
+1. Read an owner's `entry:` row and the referenced grant head.
+2. Skip the entry if the head is `pending` and its request has not yet
+   expired; an approval may be in flight. Skip it, too, if the head is owned
+   by that principal and approved.
+3. Otherwise (the head is missing, terminal, approved for another principal,
+   or a request past its expiry), delete the `entry:` and matching `grant:`
+   rows.
+4. After each pruning pass, run `backfillGrantIndex` to completion. It is
+   idempotent and re-creates any entry whose grant became approved for that
+   owner after step 1, for example a device request that reused a retained
+   locator.
+
+Never delete an owner-index `head` row while the owner has entries, because
+the head orders new entries; a reset head makes later approvals for that owner
+fail closed.
