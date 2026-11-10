@@ -1,6 +1,7 @@
 # Public API and host boundary
 
-The source package is not yet published. It composes the released
+Use an exact registry version after its release has been verified as described in
+[release operations](RELEASING.md). The package composes the released
 `@pegma/authorization-core` AccessContext, `@pegma/spine` Clock/PrincipalId/
 IsoTimestamp, `@pegma/storage-core` Store, and transactional `@pegma/audit`.
 The host keeps its existing login, session, administrator policy, browser
