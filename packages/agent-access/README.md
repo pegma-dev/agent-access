@@ -41,8 +41,10 @@ File-upload endpoints may opt in to multipart bodies per authenticator with
 `createProtectedResourceAuthenticator({ service, configuration, multipart: { maxBytes } })`.
 The bearer still comes only from the `Authorization` header. The body is bounded
 before and during streaming, parsed from a clone so the original request stays
-readable, rejected when any part carries credential fields, and returned as
-`result.form`. Without the option, multipart bodies are rejected as before.
+readable on success, rejected (with the upload source cancelled) when any part
+carries credential fields, and returned as `result.form`. The bearer is
+authenticated again after parsing, so revocation during a slow upload fails
+closed. Without the option, multipart bodies are rejected as before.
 
 Actual existing-login/Admin-consent integration and per-client acceptance remain
 open for each host. The fictional protocol example does not establish those

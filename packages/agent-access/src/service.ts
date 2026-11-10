@@ -82,10 +82,10 @@ interface Decision<T> {
 const DEFAULT_GRANT_PAGE_SIZE = 20;
 const MAX_GRANT_PAGE_SIZE = 100;
 const DEFAULT_BACKFILL_PAGE_SIZE = 100;
+/** Statuses a listed (approved) grant can hold; denied requests are never listed. */
 const GRANT_STATUSES: readonly GrantStatus[] = [
   "pending",
   "active",
-  "denied",
   "revoked",
   "expired",
 ];
@@ -1376,11 +1376,10 @@ class AgentAccessService implements AgentAccessServicePort {
         MAX_SCAN_PAGE_SIZE,
       );
       const cursor = request.cursor;
+      // Adapter continuations are opaque; captureInput already bounds their size.
       if (
         cursor !== undefined &&
-        (typeof cursor !== "string" ||
-          cursor.length === 0 ||
-          cursor.length > 4096)
+        (typeof cursor !== "string" || cursor.length === 0)
       )
         throw new OAuthError("invalid_request");
       const page = await this.records.scan({

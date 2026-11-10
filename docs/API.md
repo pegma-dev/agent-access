@@ -147,10 +147,15 @@ await service.revokeGrant(browserContext, selectedGrantId);
   than `limit` grants, even none, while `nextCursor` is non-null. Approvals
   made while paging appear on a fresh first page and never duplicate entries.
 - **Owner-bound cursor.** `nextCursor` is an opaque `pgc1.` string bound to
-  the owner's index partition and carrying an integrity check. A cursor from
-  another owner, an altered position or check, or any malformed value fails
-  with `invalid_request` and reveals nothing. The cursor is not a secret and
-  never authorizes anything: every page still re-verifies the session.
+  the owner's index partition. It carries a public, unkeyed checksum that
+  detects inconsistent or accidental edits; it is not tamper-proof, because a
+  caller can recompute the checksum. A cursor from another owner, an edit that
+  does not match its checksum, or any malformed value fails with
+  `invalid_request` and reveals nothing. Safety never depends on the cursor:
+  every page re-verifies the session and owner, a cursor for another owner's
+  partition is always rejected, and a position past the owner's current head
+  is clamped. A deliberately recomputed position only repositions the caller
+  within their own grants.
 - **Safe views.** Each item is exactly the `GrantView` that `getGrant` returns.
   Credential hashes, consent fingerprints, PKCE challenges, redirects, and raw
   storage records are never included.
@@ -159,8 +164,11 @@ await service.revokeGrant(browserContext, selectedGrantId);
   `active`, `revoked`, or `expired` (derived from the absolute expiry as in
   `getGrant`). Unapproved authorization requests and denied requests are not
   linked agents and are not listed; `getGrant` still reads them by ID. Pass
-  `statuses`, a non-empty set of distinct `GrantStatus` values, to keep only
-  matching items, for example `statuses: ["active"]`.
+  `statuses`, a non-empty set of distinct values from `pending`, `active`,
+  `revoked`, and `expired`, to keep only matching items, for example
+  `statuses: ["active"]`. Because denied requests are never listed, a
+  `denied` filter value is rejected with `invalid_request` instead of
+  silently returning empty pages.
 
 The owner index is a separate Storage Core collection,
 `agent-access.owner-index.v1`, with one partition per hashed
@@ -174,6 +182,15 @@ the leftover entry is harmless: listing re-reads each authoritative grant head
 and returns it only when its issuer, resource, and owner match. Revocation and
 expiry change only the grant head, which listing reads, so they need no index
 write. Membership records make indexing idempotent.
+
+**Upgrade provisioning.** After this change every approval also reads and
+writes `agent-access.owner-index.v1`. Storage Core adapters that keep all
+collections in one table or database need no action. A host whose store
+provisions collections, tables, or roles explicitly must provision this
+collection with the same read/write/transaction rights as
+`agent-access.records.v1` before deploying; otherwise approvals fail closed
+with `server_error` while existing grants, tokens, and resource access keep
+working.
 
 Grants approved before this index existed have no entries. They remain fully
 usable through `getGrant`, `revokeGrant`, and every token operation, but do not
@@ -192,8 +209,10 @@ do {
 
 Each call scans at most `limit` physical grant rows (default 100, maximum 1000) through Storage Core's authoritative scan and indexes approved, owned
 heads for this issuer and resource. Reruns and concurrent approvals add nothing
-twice. The scan cursor is the storage adapter's own continuation; a malformed
-adapter cursor fails as `server_error`. Run it from a host maintenance job
+twice. The scan cursor is the storage adapter's own continuation and is passed
+through unchanged. A non-string or empty cursor, or one exceeding the
+configured input bound, fails as `invalid_request`; a cursor the adapter
+itself rejects fails as `server_error`. Run it from a host maintenance job
 behind host rate limits, never from an agent-facing route.
 
 ## Internal credential and validation helpers
@@ -244,8 +263,14 @@ bounded storage operations and a reviewed host retention policy. Deleting
 consumed hashes early would disable reuse detection. Source validation does
 not publish the package, configure a trusted publisher, or activate a host.
 
-Owner-index rows hold only a grant ID and a sequence number. After a host
-removes an expired grant partition, its index entry is skipped by listing; the
-host may also delete that owner's `entry:` and `grant:` rows for the removed
-grant with bounded keyed deletes. Never delete an owner-index `head` row while
-the owner has listed grants, because the head orders new entries.
+Owner-index rows hold only a grant ID and a sequence number. Listing skips
+an entry whose grant head is missing (removed by retention), owned by another
+principal, or never approved. Such entries arise only from host retention or
+from an approval that failed or lost its outcome after its write-ahead index
+commit, so they are rare, but each still occupies a slot on its page. A host
+maintenance job may prune them with bounded keyed work: read an owner's
+`entry:` row, read the referenced grant head, and when that head is missing,
+not owned by that principal, or lacks an approval, delete the `entry:` and
+matching `grant:` rows. Never delete an owner-index `head` row while the
+owner has entries, because the head orders new entries; a reset head makes
+later approvals for that owner fail closed.

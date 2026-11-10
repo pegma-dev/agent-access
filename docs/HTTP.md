@@ -98,28 +98,41 @@ than 16 MiB (16777216 bytes); an invalid bound throws `OAuthError` at
 construction. Larger uploads need a separate host transport, such as a
 pre-authorized direct upload.
 
-The order is fixed. Header checks run first: exactly one valid RFC 2046
-`boundary` parameter, and a well-formed `Content-Length` no larger than the
-bound when declared. A declared oversize body returns HTTP 413 before any byte
+The order is fixed. Header checks run first: Content-Type parameters are
+parsed quote-aware (RFC 9110, so quoted values may contain `;`), there must
+be exactly one valid RFC 2046 `boundary` parameter (a token, or a quoted
+string when it uses spaces or other separators), and a declared
+`Content-Length` must be well formed and no larger than the bound. A declared oversize body returns HTTP 413 before any byte
 is read. The `Authorization: Bearer` header is then authenticated exactly as
 for other requests, so a missing or invalid bearer returns its 401 challenge
-without reading the body. Only after the bearer is accepted is the body parsed.
+without reading the body. Only after the bearer is accepted is the body parsed. Because an upload can
+take arbitrarily long, the bearer is authenticated again after parsing, and
+the returned access reflects that second check: revocation, expiry, or an
+authority change during the upload fails closed.
 
 Credentials still come only from the header. The body is read from
 `request.clone()` through a byte counter, so the host's original `Request`
-stays unread and an oversized or unbounded stream is cancelled at the bound
-with HTTP 413. The parsed form is returned as `result.form` so the host need
-not parse twice; the host may instead read its untouched original body. Budget
-memory for about twice `maxBytes` per in-flight upload: the tee retains the
-unread original while the clone is parsed. The authenticator rejects with HTTP
+stays unread on success. An oversized or unbounded stream is stopped at the
+bound with HTTP 413. On every rejection after the multipart headers are
+examined, both tee branches are cancelled so the upload source itself closes;
+the host must not read the body of a rejected request. The parsed form is returned as `result.form` so the host need
+not parse twice; the host may instead read its untouched original body. For simple file
+uploads, budget about twice `maxBytes` per in-flight upload: the tee retains
+the unread original while the clone is parsed. This is not a general memory
+bound. The bound limits streamed bytes only; the runtime's parsed `FormData`
+adds per-part objects and string representations, so bodies with many small
+parts or large text fields can cost more. Keep `maxBytes` small for
+endpoints that accept many fields, and apply host request concurrency limits. The authenticator rejects with HTTP
 400 `invalid_request` any part named `access_token`, `refresh_token`,
 `id_token`, `client_secret`, `client_assertion`, `client_assertion_type`,
-`device_code`, or `code_verifier` (case-insensitive), and any text value or
-filename containing an issued Agent Access credential. Query `access_token` is
+`device_code`, or `code_verifier` (case-insensitive), and any part name, text value,
+or filename containing an issued Agent Access credential. Query `access_token` is
 still rejected. File contents are not scanned. Missing, duplicate, or invalid
 boundaries, an empty body, and a malformed multipart body are HTTP 400
-`invalid_request`. Every rejection carries the usual `WWW-Authenticate`
-challenge and no submitted values. Non-multipart requests through an opted-in
+`invalid_request`. Every 4xx rejection carries the usual `WWW-Authenticate`
+challenge; a 503 `server_error` (for example, unavailable current authority)
+carries none, as for other resource requests. No rejection includes submitted
+values. Non-multipart requests through an opted-in
 authenticator behave exactly as before and carry no `form`.
 
 The host still authorizes the actual operation using

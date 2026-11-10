@@ -69,7 +69,7 @@ function countingStream(chunks: number, chunkBytes: number) {
 
 async function setup(maxBytes?: number) {
   const world = fixture(createMemoryStore());
-  const { tokens } = await world.completeDevice([READ]);
+  const { tokens, approval } = await world.completeDevice([READ]);
   const optedIn = createProtectedResourceAuthenticator({
     service: world.service,
     configuration: world.options.configuration,
@@ -79,7 +79,7 @@ async function setup(maxBytes?: number) {
     service: world.service,
     configuration: world.options.configuration,
   });
-  return { world, tokens, optedIn, standard };
+  return { world, tokens, grantId: approval.requestId, optedIn, standard };
 }
 
 async function errorOf(result: unknown) {
@@ -176,14 +176,22 @@ describe("opt-in bounded multipart bearer transport", () => {
     expect(rejected.status).toBe(413);
     expect(rejected.body.error).toBe("invalid_request");
     expect(state.pulled).toBeLessThanOrEqual(1);
+    // The rejected upload source is cancelled rather than left open.
+    expect(state.cancelled).toBe(true);
     for (const declared of ["-1", "1e3", "01", "abc"]) {
+      // A never-pulled stream proves the header itself was rejected.
+      const pending = countingStream(2, 16);
       const malformed = await errorOf(
         await optedIn.authenticate(
-          upload(tokens.access_token, "x", { "content-length": declared }),
+          upload(tokens.access_token, pending.stream, {
+            "content-length": declared,
+          }),
           [READ],
         ),
       );
       expect(malformed.status).toBe(400);
+      expect(pending.state.pulled).toBeLessThanOrEqual(1);
+      expect(pending.state.cancelled).toBe(true);
     }
   });
 
@@ -194,8 +202,72 @@ describe("opt-in bounded multipart bearer transport", () => {
     const rejected = await errorOf(await optedIn.authenticate(request, [READ]));
     expect(rejected.status).toBe(413);
     expect(rejected.body.error).toBe("invalid_request");
-    // Only a few chunks past the bound are ever pulled, never the whole stream.
+    // Only a few chunks past the bound are ever pulled, never the whole stream,
+    // and both tee branches are cancelled so the source itself closes.
     expect(state.pulled).toBeLessThan(20);
+    expect(state.cancelled).toBe(true);
+  });
+
+  it("enforces the 1 MiB default bound exactly", async () => {
+    const { tokens, optedIn } = await setup();
+    const head = `--${BOUNDARY}\r\nContent-Disposition: form-data; name="file"; filename="a.bin"\r\n\r\n`;
+    const tail = `\r\n--${BOUNDARY}--\r\n`;
+    const sized = (total: number) =>
+      head + "a".repeat(total - head.length - tail.length) + tail;
+    const exact = await optedIn.authenticate(
+      upload(tokens.access_token, sized(DEFAULT_MULTIPART_MAX_BYTES)),
+      [READ],
+    );
+    if (exact instanceof Response)
+      throw new Error(`Expected access at the bound: ${exact.status}`);
+    const file = exact.form?.get("file");
+    if (!(file instanceof Blob)) throw new Error("Expected parsed file");
+    expect(file.size).toBe(
+      DEFAULT_MULTIPART_MAX_BYTES - head.length - tail.length,
+    );
+    const over = await errorOf(
+      await optedIn.authenticate(
+        upload(tokens.access_token, sized(DEFAULT_MULTIPART_MAX_BYTES + 1)),
+        [READ],
+      ),
+    );
+    expect(over.status).toBe(413);
+  });
+
+  it("authenticates again after a slow upload so revocation during it fails closed", async () => {
+    const { world, tokens, grantId, optedIn } = await setup();
+    const body = new TextEncoder().encode(
+      multipartBody([{ name: "title", value: "slow" }]),
+    );
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reached = () => {};
+    const midway = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    let pulls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        pulls += 1;
+        if (pulls === 1) controller.enqueue(body.slice(0, 10));
+        else if (pulls === 2) {
+          reached();
+          await gate;
+          controller.enqueue(body.slice(10));
+        } else controller.close();
+      },
+    });
+    const pending = optedIn.authenticate(upload(tokens.access_token, stream), [
+      READ,
+    ]);
+    await midway;
+    await world.service.revokeGrant(world.browser, grantId);
+    release();
+    const rejected = await errorOf(await pending);
+    expect(rejected.status).toBe(401);
+    expect(rejected.challenge).toContain('error="invalid_token"');
   });
 
   it("rejects credential-bearing form parts and query credentials", async () => {
@@ -216,6 +288,7 @@ describe("opt-in bounded multipart bearer transport", () => {
           filename: `${tokens.access_token}.txt`,
         },
       ],
+      [{ name: tokens.access_token, value: "content" }],
     ];
     for (const parts of forbidden) {
       const request = upload(tokens.access_token, multipartBody(parts));
@@ -269,6 +342,9 @@ describe("opt-in bounded multipart bearer transport", () => {
       'multipart/form-data; boundary=""',
       `multipart/form-data; boundary=${"b".repeat(71)}`,
       "multipart/form-data; boundary=bad\\boundary",
+      `multipart/form-data; boundary=${BOUNDARY}; note="unterminated`,
+      `multipart/form-data; boundary=${BOUNDARY}; =value`,
+      `multipart/form-data; boundary=${BOUNDARY} trailing`,
     ]) {
       const request = upload(
         tokens.access_token,
@@ -313,6 +389,29 @@ describe("opt-in bounded multipart bearer transport", () => {
     }
   });
 
+  it("accepts quoted boundaries and quoted extension parameters containing separators", async () => {
+    const { tokens, optedIn } = await setup();
+    for (const contentType of [
+      `multipart/form-data; boundary="${BOUNDARY}"`,
+      `multipart/form-data; boundary=${BOUNDARY}; note="a;b"`,
+      String.raw`multipart/form-data; note="x\"; boundary=y"; boundary=` +
+        BOUNDARY,
+      `Multipart/Form-Data ; charset=utf-8;; Boundary=${BOUNDARY}`,
+    ]) {
+      const result = await optedIn.authenticate(
+        upload(
+          tokens.access_token,
+          multipartBody([{ name: "title", value: "quoted" }]),
+          { "content-type": contentType },
+        ),
+        [READ],
+      );
+      if (result instanceof Response)
+        throw new Error(`Expected access for ${contentType}`);
+      expect(result.form?.get("title")).toBe("quoted");
+    }
+  });
+
   it("validates the opt-in bound at construction", async () => {
     const world = fixture(createMemoryStore());
     for (const maxBytes of [0, -1, 1.5, MAX_MULTIPART_BYTES + 1, Number.NaN])
@@ -321,6 +420,23 @@ describe("opt-in bounded multipart bearer transport", () => {
           service: world.service,
           configuration: world.options.configuration,
           multipart: { maxBytes },
+        }),
+      ).toThrow(OAuthError);
+    // Null never silently selects the default; unknown keys and exotic objects fail.
+    for (const multipart of [
+      { maxBytes: null },
+      { maxBytes: "1024" },
+      { maxsize: 1_024 },
+      [],
+      new Date(),
+      null,
+      1_024,
+    ])
+      expect(() =>
+        createProtectedResourceAuthenticator({
+          service: world.service,
+          configuration: world.options.configuration,
+          multipart: multipart as { maxBytes?: number },
         }),
       ).toThrow(OAuthError);
     expect(DEFAULT_MULTIPART_MAX_BYTES).toBeLessThanOrEqual(

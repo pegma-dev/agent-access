@@ -684,13 +684,25 @@ const ISSUED_CREDENTIAL = /pg[adrt]1\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}/;
 const MULTIPART = /^multipart\/form-data(?:\s*;|\s*$)/i;
 const BOUNDARY = /^[0-9A-Za-z'()+_,\-./:=? ]{0,69}[0-9A-Za-z'()+_,\-./:=?]$/;
 
-function multipartMaximum(
-  multipart: ProtectedResourceMultipartOptions | undefined,
-): number | undefined {
+const TOKEN_CHARACTER = /[!#$%&'*+.^_`|~0-9A-Za-z-]/;
+
+function multipartMaximum(multipart: unknown): number | undefined {
   if (multipart === undefined) return undefined;
-  if (multipart === null || typeof multipart !== "object") invalidRequest();
-  const maximum = multipart.maxBytes ?? DEFAULT_MULTIPART_MAX_BYTES;
   if (
+    multipart === null ||
+    typeof multipart !== "object" ||
+    Array.isArray(multipart) ||
+    (Object.getPrototypeOf(multipart) !== Object.prototype &&
+      Object.getPrototypeOf(multipart) !== null) ||
+    Object.keys(multipart).some((key) => key !== "maxBytes")
+  )
+    invalidRequest();
+  // Only an omitted bound selects the default; null and other values must validate.
+  const supplied = (multipart as { readonly maxBytes?: unknown }).maxBytes;
+  const maximum =
+    supplied === undefined ? DEFAULT_MULTIPART_MAX_BYTES : supplied;
+  if (
+    typeof maximum !== "number" ||
     !Number.isSafeInteger(maximum) ||
     maximum < 1 ||
     maximum > MAX_MULTIPART_BYTES
@@ -699,25 +711,92 @@ function multipartMaximum(
   return maximum;
 }
 
+/**
+ * RFC 9110 media-type parameters: `*( OWS ";" OWS [ token "=" ( token /
+ * quoted-string ) ] )`. Quoted values may contain semicolons and escapes.
+ */
+function mediaParameters(contentType: string): readonly {
+  readonly name: string;
+  readonly value: string;
+  readonly quoted: boolean;
+}[] {
+  const start = contentType.indexOf(";");
+  if (start < 0) return [];
+  const result: { name: string; value: string; quoted: boolean }[] = [];
+  let index = start;
+  const whitespace = () => {
+    while (contentType[index] === " " || contentType[index] === "\t")
+      index += 1;
+  };
+  while (index < contentType.length) {
+    if (contentType[index] !== ";") invalidRequest();
+    index += 1;
+    whitespace();
+    if (index >= contentType.length) break;
+    if (contentType[index] === ";") continue;
+    const nameStart = index;
+    while (
+      index < contentType.length &&
+      TOKEN_CHARACTER.test(contentType[index] as string)
+    )
+      index += 1;
+    if (index === nameStart || contentType[index] !== "=") invalidRequest();
+    const name = contentType.slice(nameStart, index).toLowerCase();
+    index += 1;
+    let value = "";
+    let quoted = false;
+    if (contentType[index] === '"') {
+      quoted = true;
+      index += 1;
+      while (true) {
+        const character = contentType[index];
+        if (character === undefined) return invalidRequest();
+        index += 1;
+        if (character === '"') break;
+        if (character === "\\") {
+          const escaped = contentType[index];
+          if (escaped === undefined) return invalidRequest();
+          value += escaped;
+          index += 1;
+        } else value += character;
+      }
+    } else {
+      const valueStart = index;
+      while (
+        index < contentType.length &&
+        TOKEN_CHARACTER.test(contentType[index] as string)
+      )
+        index += 1;
+      if (index === valueStart) invalidRequest();
+      value = contentType.slice(valueStart, index);
+    }
+    if (CONTROL.test(value)) invalidRequest();
+    result.push({ name, value, quoted });
+    whitespace();
+  }
+  return result;
+}
+
 /** Header-only checks that run before the bearer is validated or any byte is read. */
 function assertMultipartHeaders(
   request: Request,
   contentType: string,
   maximum: number,
 ): void {
-  let boundaries = 0;
-  for (const parameter of contentType.split(";").slice(1)) {
-    const separator = parameter.indexOf("=");
-    if (separator < 1) invalidRequest();
-    const name = parameter.slice(0, separator).trim().toLowerCase();
-    if (name !== "boundary") continue;
-    boundaries += 1;
-    let value = parameter.slice(separator + 1).trim();
-    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"'))
-      value = value.slice(1, -1);
-    if (!BOUNDARY.test(value)) invalidRequest();
-  }
-  if (boundaries !== 1) invalidRequest();
+  const boundaries = mediaParameters(contentType).filter(
+    (parameter) => parameter.name === "boundary",
+  );
+  if (boundaries.length !== 1) invalidRequest();
+  const boundary = boundaries[0] as { value: string; quoted: boolean };
+  // An unquoted boundary is a token; a quoted one may also use RFC 2046 spaces and punctuation.
+  if (
+    !BOUNDARY.test(boundary.value) ||
+    (!boundary.quoted &&
+      ![...boundary.value].every((character) =>
+        TOKEN_CHARACTER.test(character),
+      ))
+  )
+    invalidRequest();
   const declared = request.headers.get("Content-Length");
   if (declared !== null) {
     if (!/^(?:0|[1-9][0-9]*)$/.test(declared)) invalidRequest();
@@ -773,8 +852,10 @@ async function multipartForm(
   if (exceeded) invalidRequest(413);
   for (const [name, value] of form.entries()) {
     if (CREDENTIAL_FIELDS.has(name.toLowerCase())) invalidRequest();
+    // Part names, text values, and filenames are all scanned for issued credentials.
     const text = typeof value === "string" ? value : value.name;
-    if (ISSUED_CREDENTIAL.test(text)) invalidRequest();
+    if (ISSUED_CREDENTIAL.test(name) || ISSUED_CREDENTIAL.test(text))
+      invalidRequest();
   }
   return form;
 }
@@ -823,8 +904,15 @@ export function createProtectedResourceAuthenticator(
           (multipart && multipartBytes === undefined)
         )
           invalidRequest();
-        if (multipart && multipartBytes !== undefined)
-          assertMultipartHeaders(request, contentType, multipartBytes);
+        if (multipart && multipartBytes !== undefined) {
+          try {
+            assertMultipartHeaders(request, contentType, multipartBytes);
+          } catch (error) {
+            // A rejected upload never leaves its source stream open.
+            await cancelBody(request);
+            throw error;
+          }
+        }
         const authorization = request.headers.get("Authorization");
         if (authorization === null)
           return resourceError(
@@ -839,17 +927,29 @@ export function createProtectedResourceAuthenticator(
         );
         const match = /^Bearer ([A-Za-z0-9\-._~+/]+=*)$/i.exec(authorization);
         if (match === null || match[1] === undefined) invalidRequest();
-        const delegated = await options.service.authenticate({
+        const input = {
           token: match[1],
           resource: configuration.resource,
           requiredScopes: selected,
-        });
+        };
+        const delegated = await options.service.authenticate(input);
         // The body is inspected only after the bearer header is accepted.
         if (!multipart || multipartBytes === undefined) return delegated;
-        return {
-          ...delegated,
-          form: await multipartForm(request, contentType, multipartBytes),
-        };
+        try {
+          const form = await multipartForm(
+            request,
+            contentType,
+            multipartBytes,
+          );
+          // An upload can take arbitrarily long; revocation, expiry, and
+          // authority changes during it must still fail closed.
+          const current = await options.service.authenticate(input);
+          return { ...current, form };
+        } catch (error) {
+          // Cancel the unread original tee branch so the source closes too.
+          await cancelBody(request);
+          throw error;
+        }
       } catch (error) {
         return resourceError(error, configuration, selected);
       }

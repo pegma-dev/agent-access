@@ -180,6 +180,134 @@ for (const [backend, makeStore] of storeFactories) {
         ).code,
       ).toBe("invalid_token");
     });
+
+    it("indexes grants stored before listing existed with a bounded idempotent backfill", async () => {
+      const store = await makeStore();
+      const world = fixture(store);
+      const created: string[] = [];
+      for (let index = 0; index < 4; index += 1)
+        created.push((await world.completeDevice([READ])).approval.requestId);
+      await world.service.beginDeviceAuthorization({
+        clientId: CLIENT,
+        resource: RESOURCE,
+        scopes: [READ],
+      });
+      // Remove the owner index to reproduce records written by an earlier release.
+      const raw = store.collection(
+        defineCollection<StoredRecord>({
+          name: OWNER_INDEX,
+          key: (record) => ({
+            partition: String(record.recordPartition),
+            id: String(record.recordId),
+          }),
+          codec: { encode: (record) => record, decode: (record) => record },
+        }),
+      );
+      const indexRows = await raw.scan({ limit: 1_000 });
+      expect(indexRows.records).toHaveLength(9);
+      for (const row of indexRows.records) await raw.delete(row.key);
+
+      expect(
+        await world.service.listGrants(browser, {
+          ownerPrincipal: admin.principalId,
+        }),
+      ).toEqual({ grants: [], nextCursor: null });
+      // Keyed inspection and revocation never depended on the index.
+      expect(
+        (await world.service.getGrant(browser, created[0] as string)).status,
+      ).toBe("active");
+
+      let indexed = 0;
+      let scanned = 0;
+      let cursor: string | undefined;
+      let terminated = false;
+      for (let index = 0; index < 100; index += 1) {
+        const result = await world.service.backfillGrantIndex({
+          limit: 3,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        expect(result.scanned).toBeLessThanOrEqual(3);
+        indexed += result.indexed;
+        scanned += result.scanned;
+        if (result.nextCursor === null) {
+          terminated = true;
+          break;
+        }
+        cursor = result.nextCursor;
+      }
+      // The documented maintenance loop must reach a null continuation.
+      expect(terminated).toBe(true);
+      expect(indexed).toBe(4);
+      expect(scanned).toBeGreaterThan(4);
+      const rerun = await world.service.backfillGrantIndex({ limit: 1_000 });
+      expect(rerun.indexed).toBe(0);
+      const listed = await world.service.listGrants(browser, {
+        ownerPrincipal: admin.principalId,
+      });
+      expect(listed.grants.map((grant) => grant.grantId).sort()).toEqual(
+        [...created].sort(),
+      );
+      await world.service.revokeGrant(browser, created[1] as string);
+      expect(
+        (
+          await world.service.listGrants(browser, {
+            ownerPrincipal: admin.principalId,
+            statuses: ["revoked"],
+          })
+        ).grants.map((grant) => grant.grantId),
+      ).toEqual([created[1]]);
+      for (const input of [
+        { limit: 0 },
+        { limit: 1_001 },
+        { cursor: "" },
+        { other: 1 },
+      ])
+        expect(
+          (
+            await rejected(
+              world.service.backfillGrantIndex(
+                input as Parameters<typeof world.service.backfillGrantIndex>[0],
+              ),
+            )
+          ).code,
+        ).toBe("invalid_request");
+    });
+
+    it("tolerates index entries whose grant was removed by host retention", async () => {
+      const store = await makeStore();
+      const world = fixture(store);
+      const kept = await world.completeDevice([READ]);
+      const removed = await world.completeDevice([READ]);
+      const raw = store.collection(
+        defineCollection<StoredRecord>({
+          name: "agent-access.records.v1",
+          key: (record) => ({
+            partition: String(record.recordPartition),
+            id: String(record.recordId),
+          }),
+          codec: { encode: (record) => record, decode: (record) => record },
+        }),
+      );
+      for (const row of await raw.list(removed.approval.requestId))
+        await raw.delete({
+          partition: removed.approval.requestId,
+          id: String(row.recordId),
+        });
+      const listed = await world.service.listGrants(browser, {
+        ownerPrincipal: admin.principalId,
+      });
+      expect(listed.grants.map((grant) => grant.grantId)).toEqual([
+        kept.approval.requestId,
+      ]);
+      const serialized = JSON.stringify(listed);
+      for (const secret of [
+        kept.tokens.access_token,
+        kept.tokens.refresh_token,
+        kept.device.device_code,
+      ])
+        expect(serialized).not.toContain(secret);
+      expect(serialized).not.toMatch(/Hash|consentFingerprint|codeChallenge/);
+    });
   });
 }
 
@@ -364,6 +492,8 @@ describe("grant listing bounds and isolation", () => {
       { ownerPrincipal: admin.principalId, statuses: [] },
       { ownerPrincipal: admin.principalId, statuses: ["active", "active"] },
       { ownerPrincipal: admin.principalId, statuses: ["approved"] },
+      // Denied requests are never listed, so filtering for them is rejected.
+      { ownerPrincipal: admin.principalId, statuses: ["denied"] },
       { ownerPrincipal: admin.principalId, statuses: "active" },
       null,
       [],
@@ -401,7 +531,43 @@ describe("grant listing bounds and isolation", () => {
     ).toBe("server_error");
   });
 
-  it("reports revoked and expired grants with status and omits pending or denied requests", async () => {
+  it("lists an approved but unredeemed grant as pending, then active once redeemed", async () => {
+    const world = fixture(createMemoryStore());
+    const device = await world.service.beginDeviceAuthorization({
+      clientId: CLIENT,
+      resource: RESOURCE,
+      scopes: [READ],
+    });
+    const approval = await world.service.getDeviceApproval(
+      browser,
+      device.user_code,
+    );
+    await world.service.approve(browser, {
+      requestId: approval.requestId,
+      decision: "approve",
+      userCode: device.user_code,
+    });
+    const before = await world.service.listGrants(browser, {
+      ownerPrincipal: admin.principalId,
+      statuses: ["pending"],
+    });
+    expect(before.grants.map((grant) => [grant.grantId, grant.status])).toEqual(
+      [[approval.requestId, "pending"]],
+    );
+    expect(before.grants[0]?.scopes.map((scope) => scope.name)).toEqual([READ]);
+    world.advance(device.interval);
+    await world.service.pollDeviceToken({
+      clientId: CLIENT,
+      resource: RESOURCE,
+      deviceCode: device.device_code,
+    });
+    const after = await world.service.listGrants(browser, {
+      ownerPrincipal: admin.principalId,
+    });
+    expect(after.grants.map((grant) => grant.status)).toEqual(["active"]);
+  });
+
+  it("reports revoked and expired grants with status and omits unapproved or denied requests", async () => {
     const world = fixture(createMemoryStore());
     const revoked = await world.completeDevice([READ]);
     await world.service.revokeGrant(browser, revoked.approval.requestId);
@@ -455,127 +621,5 @@ describe("grant listing bounds and isolation", () => {
         })
       ).grants,
     ).toEqual([]);
-  });
-
-  it("indexes grants stored before listing existed with a bounded idempotent backfill", async () => {
-    const store = createMemoryStore();
-    const world = fixture(store);
-    const created: string[] = [];
-    for (let index = 0; index < 4; index += 1)
-      created.push((await world.completeDevice([READ])).approval.requestId);
-    await world.service.beginDeviceAuthorization({
-      clientId: CLIENT,
-      resource: RESOURCE,
-      scopes: [READ],
-    });
-    // Remove the owner index to reproduce records written by an earlier release.
-    const raw = store.collection(
-      defineCollection<StoredRecord>({
-        name: OWNER_INDEX,
-        key: (record) => ({
-          partition: String(record.recordPartition),
-          id: String(record.recordId),
-        }),
-        codec: { encode: (record) => record, decode: (record) => record },
-      }),
-    );
-    const indexRows = await raw.scan({ limit: 1_000 });
-    expect(indexRows.records).toHaveLength(9);
-    for (const row of indexRows.records) await raw.delete(row.key);
-
-    expect(
-      await world.service.listGrants(browser, {
-        ownerPrincipal: admin.principalId,
-      }),
-    ).toEqual({ grants: [], nextCursor: null });
-    // Keyed inspection and revocation never depended on the index.
-    expect(
-      (await world.service.getGrant(browser, created[0] as string)).status,
-    ).toBe("active");
-
-    let indexed = 0;
-    let scanned = 0;
-    let cursor: string | undefined;
-    for (let index = 0; index < 100; index += 1) {
-      const result = await world.service.backfillGrantIndex({
-        limit: 3,
-        ...(cursor === undefined ? {} : { cursor }),
-      });
-      expect(result.scanned).toBeLessThanOrEqual(3);
-      indexed += result.indexed;
-      scanned += result.scanned;
-      if (result.nextCursor === null) break;
-      cursor = result.nextCursor;
-    }
-    expect(indexed).toBe(4);
-    expect(scanned).toBeGreaterThan(4);
-    const rerun = await world.service.backfillGrantIndex({ limit: 1_000 });
-    expect(rerun.indexed).toBe(0);
-    const listed = await world.service.listGrants(browser, {
-      ownerPrincipal: admin.principalId,
-    });
-    expect(listed.grants.map((grant) => grant.grantId).sort()).toEqual(
-      [...created].sort(),
-    );
-    await world.service.revokeGrant(browser, created[1] as string);
-    expect(
-      (
-        await world.service.listGrants(browser, {
-          ownerPrincipal: admin.principalId,
-          statuses: ["revoked"],
-        })
-      ).grants.map((grant) => grant.grantId),
-    ).toEqual([created[1]]);
-    for (const input of [
-      { limit: 0 },
-      { limit: 1_001 },
-      { cursor: "" },
-      { other: 1 },
-    ])
-      expect(
-        (
-          await rejected(
-            world.service.backfillGrantIndex(
-              input as Parameters<typeof world.service.backfillGrantIndex>[0],
-            ),
-          )
-        ).code,
-      ).toBe("invalid_request");
-  });
-
-  it("tolerates index entries whose grant was removed by host retention", async () => {
-    const store = createMemoryStore();
-    const world = fixture(store);
-    const kept = await world.completeDevice([READ]);
-    const removed = await world.completeDevice([READ]);
-    const raw = store.collection(
-      defineCollection<StoredRecord>({
-        name: "agent-access.records.v1",
-        key: (record) => ({
-          partition: String(record.recordPartition),
-          id: String(record.recordId),
-        }),
-        codec: { encode: (record) => record, decode: (record) => record },
-      }),
-    );
-    for (const row of await raw.list(removed.approval.requestId))
-      await raw.delete({
-        partition: removed.approval.requestId,
-        id: String(row.recordId),
-      });
-    const listed = await world.service.listGrants(browser, {
-      ownerPrincipal: admin.principalId,
-    });
-    expect(listed.grants.map((grant) => grant.grantId)).toEqual([
-      kept.approval.requestId,
-    ]);
-    const serialized = JSON.stringify(listed);
-    for (const secret of [
-      kept.tokens.access_token,
-      kept.tokens.refresh_token,
-      kept.device.device_code,
-    ])
-      expect(serialized).not.toContain(secret);
-    expect(serialized).not.toMatch(/Hash|consentFingerprint|codeChallenge/);
   });
 });
