@@ -268,22 +268,30 @@ an entry whose grant head is missing (removed by retention), owned by another
 principal, or never approved. Such entries arise only from host retention or
 from an approval that failed or lost its outcome after its write-ahead index
 commit, so they are rare, but each still occupies a slot on its page. A host
-maintenance job may prune them with bounded keyed work, but must not race an
-approval: `approve` commits the index entry before the grant transition, so
-during that window the head is still `pending` and unowned or unapproved.
-Prune an entry only when the referenced head can no longer be approved:
+maintenance job may prune them with bounded keyed work. Owner-index and grant
+partitions cannot be updated atomically together, so pruning can never be made
+strictly race-free against an approval. `approve` commits the index entry
+first, and its grant transaction can still commit shortly after the request
+deadline, because the deadline is checked before the transaction is sent.
+Treat a pending head as possibly in flight well past its expiry:
 
 1. Read an owner's `entry:` row and the referenced grant head.
-2. Skip the entry if the head is `pending` and its request has not yet
-   expired; an approval may be in flight. Skip it, too, if the head is owned
-   by that principal and approved.
+2. Skip the entry if the head is owned by that principal and approved, or if
+   the head is `pending` and the current time is earlier than its request
+   expiry plus a grace period longer than the host's longest approval request
+   or storage timeout (for example, at least ten minutes).
 3. Otherwise (the head is missing, terminal, approved for another principal,
-   or a request past its expiry), delete the `entry:` and matching `grant:`
-   rows.
-4. After each pruning pass, run `backfillGrantIndex` to completion. It is
-   idempotent and re-creates any entry whose grant became approved for that
-   owner after step 1, for example a device request that reused a retained
-   locator.
+   or pending beyond that grace period), delete the `entry:` and matching
+   `grant:` rows.
+4. Run `backfillGrantIndex` to completion on a recurring schedule, not only
+   once after pruning. It is idempotent and restores any entry that a residual
+   race removed for a grant that is now approved for its owner, for example an
+   approval whose transaction outlived the grace period or a device request
+   that reused a retained locator. Until that repair runs, such a grant stays
+   fully usable and revocable by ID but is missing from `listGrants`.
+
+Hosts that cannot schedule recurring backfill should not prune: dangling
+entries are only skipped page slots, never a disclosure or authorization path.
 
 Never delete an owner-index `head` row while the owner has entries, because
 the head orders new entries; a reset head makes later approvals for that owner
