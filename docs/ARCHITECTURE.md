@@ -65,6 +65,17 @@ enables a keyed read; only a matching complete credential hash authorizes its
 transition. No cross-partition, cross-collection, or role-change transaction is
 claimed. Required lifecycle work never depends on the lossy Spine event bus.
 
+Owner discovery uses a separate owner-index collection with one partition per
+hashed issuer, resource, and owner. Because the index lives in another
+partition, it is a write-ahead locator rather than part of the grant
+transaction: approval commits the owner entry first, then the grant
+transition. Listing re-reads every authoritative grant head and returns it only
+when the owner, issuer, and resource still match, so a leftover entry from a
+failed approval never surfaces another principal's grant. Status changes touch
+only the grant head. Pages are bounded keyed reads, not scans; a bounded,
+idempotent backfill indexes grants approved before the index existed. See
+[API.md](API.md#owner-grant-listing).
+
 Credentials use Web Crypto randomness and hashing. Raw device, authorization,
 access, and refresh credentials are returned to the client and never persisted,
 logged, or included in Audit. This also excludes user codes, PKCE verifiers,

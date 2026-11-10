@@ -188,3 +188,116 @@ export const agentAccessRecords = defineCollection<AgentAccessRecord>({
   key: (record) => ({ partition: record.partition, id: record.id }),
   codec: { encode, decode },
 });
+
+/**
+ * Owner index: one partition per (issuer, resource, owner) hash. Entries only
+ * locate grant heads; the grant head stays authoritative for ownership and
+ * status, so a stale or dangling entry can never reveal another owner's grant.
+ */
+export type OwnerIndexRecord =
+  | {
+      readonly partition: string;
+      readonly id: "head";
+      readonly kind: "owner-head";
+      readonly data: { readonly next: number };
+    }
+  | {
+      readonly partition: string;
+      readonly id: string;
+      readonly kind: "member" | "entry";
+      readonly data: { readonly locator: string; readonly sequence: number };
+    };
+
+/** Sequences fit twelve decimal digits so entry IDs sort and stay bounded. */
+export const MAX_OWNER_SEQUENCE = 999_999_999_999;
+
+export function ownerEntryId(sequence: number): string {
+  return `entry:${String(sequence).padStart(12, "0")}`;
+}
+
+function validSequence(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 1 &&
+    value <= MAX_OWNER_SEQUENCE
+  );
+}
+
+function validateOwner(record: OwnerIndexRecord): void {
+  if (!SEGMENT.test(record.partition)) throw new Error("Invalid owner index");
+  if (record.kind === "owner-head") {
+    if (record.id !== "head" || !validSequence(record.data.next))
+      throw new Error("Invalid owner index");
+    return;
+  }
+  if (
+    (record.kind !== "member" && record.kind !== "entry") ||
+    !SEGMENT.test(record.data.locator) ||
+    !validSequence(record.data.sequence) ||
+    record.id !==
+      (record.kind === "member"
+        ? `grant:${record.data.locator}`
+        : ownerEntryId(record.data.sequence))
+  )
+    throw new Error("Invalid owner index");
+}
+
+function encodeOwner(record: OwnerIndexRecord): StoredRecord {
+  validateOwner(record);
+  return record.kind === "owner-head"
+    ? {
+        schemaVersion: 1,
+        recordPartition: record.partition,
+        recordId: record.id,
+        kind: record.kind,
+        next: record.data.next,
+      }
+    : {
+        schemaVersion: 1,
+        recordPartition: record.partition,
+        recordId: record.id,
+        kind: record.kind,
+        locator: record.data.locator,
+        sequence: record.data.sequence,
+      };
+}
+
+function decodeOwner(stored: StoredRecord): OwnerIndexRecord {
+  const base = ["schemaVersion", "recordPartition", "recordId", "kind"];
+  const fields =
+    stored.kind === "owner-head"
+      ? [...base, "next"]
+      : [...base, "locator", "sequence"];
+  if (
+    stored.schemaVersion !== 1 ||
+    typeof stored.recordPartition !== "string" ||
+    typeof stored.recordId !== "string" ||
+    Object.keys(stored).length !== fields.length ||
+    Object.keys(stored).some((key) => !fields.includes(key))
+  )
+    throw new Error("Invalid owner index");
+  const record = (
+    stored.kind === "owner-head"
+      ? {
+          partition: stored.recordPartition,
+          id: stored.recordId,
+          kind: stored.kind,
+          data: { next: stored.next },
+        }
+      : {
+          partition: stored.recordPartition,
+          id: stored.recordId,
+          kind: stored.kind,
+          data: { locator: stored.locator, sequence: stored.sequence },
+        }
+  ) as OwnerIndexRecord;
+  validateOwner(record);
+  return record;
+}
+
+export const ownerIndexRecords = defineCollection<OwnerIndexRecord>({
+  name: "agent-access.owner-index.v1",
+  key: (record) => ({ partition: record.partition, id: record.id }),
+  codec: { encode: encodeOwner, decode: decodeOwner },
+});

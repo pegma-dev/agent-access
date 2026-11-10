@@ -36,6 +36,13 @@ targets Codex-provider mode. Their compatibility remains unproven until actual
 per-client runs; other T3 providers are also unproven. An official SDK protocol
 test does not establish support for those applications.
 
+Hosts can list the signed-in owner's linked agents with the owner-scoped,
+paginated `listGrants` ([owner grant listing](docs/API.md#owner-grant-listing))
+and can opt individual protected-resource authenticators in to bounded
+multipart uploads with header-only bearer credentials
+([opt-in multipart uploads](docs/HTTP.md#opt-in-multipart-uploads)). Both are
+unreleased source additions and change no package version.
+
 Read the [architecture](docs/ARCHITECTURE.md), [API](docs/API.md), and
 [HTTP composition](docs/HTTP.md) before wiring a host. The
 [project plan](docs/PROJECT_PLAN.md) distinguishes source work from host gates;
