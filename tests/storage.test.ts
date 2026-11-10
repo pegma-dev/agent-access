@@ -60,16 +60,50 @@ for (const [backend, makeStore] of storeFactories) {
         expect(serialized).not.toContain(secret);
         expect(JSON.stringify(traced.transactions)).not.toContain(secret);
       }
-      expect(snapshot).toHaveLength(1);
+      expect(snapshot.map(({ collection }) => collection).sort()).toEqual([
+        "agent-access.owner-index.v1",
+        "agent-access.records.v1",
+      ]);
+      const grants = snapshot.find(
+        ({ collection }) => collection === "agent-access.records.v1",
+      );
+      const owners = snapshot.find(
+        ({ collection }) => collection === "agent-access.owner-index.v1",
+      );
       expect(
-        snapshot[0]?.rows.some(({ record }) => record.kind === "consumed"),
+        grants?.rows.some(({ record }) => record.kind === "consumed"),
       ).toBe(true);
       expect(
-        snapshot[0]?.rows.filter(({ record }) => record.kind === "audit")
-          .length,
+        grants?.rows.filter(({ record }) => record.kind === "audit").length,
       ).toBeGreaterThanOrEqual(8);
-      expect(traced.transactions.length).toBeGreaterThanOrEqual(8);
-      for (const transaction of traced.transactions) {
+      // One owner partition: its head plus a membership and an entry per approved grant.
+      expect(new Set(owners?.rows.map(({ key }) => key.partition)).size).toBe(
+        1,
+      );
+      expect(owners?.rows.map(({ record }) => record.kind).sort()).toEqual([
+        "entry",
+        "entry",
+        "member",
+        "member",
+        "owner-head",
+      ]);
+      const indexTransactions = traced.transactions.filter(
+        ({ collection }) => collection === "agent-access.owner-index.v1",
+      );
+      expect(indexTransactions).toHaveLength(2);
+      for (const transaction of indexTransactions) {
+        expect(
+          new Set(transaction.actions.map(({ key }) => key.partition)),
+        ).toEqual(new Set([transaction.partition]));
+        expect(
+          transaction.actions.map(({ record }) => record?.kind).sort(),
+        ).toEqual(["entry", "member", "owner-head"]);
+      }
+      const grantTransactions = traced.transactions.filter(
+        ({ collection }) => collection === "agent-access.records.v1",
+      );
+      expect(grantTransactions.length).toBeGreaterThanOrEqual(8);
+      for (const transaction of grantTransactions) {
         expect(
           new Set(transaction.actions.map(({ key }) => key.partition)),
         ).toEqual(new Set([transaction.partition]));

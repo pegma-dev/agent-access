@@ -139,3 +139,24 @@ export function scopeFingerprint(
     }));
   return sha256(`agent-access:scopes:v1:${JSON.stringify(selected)}`);
 }
+
+/** Owner-index partition; unambiguous JSON framing separates the bound identifiers. */
+export function ownerIndexPartition(
+  issuer: string,
+  resource: string,
+  ownerId: string,
+): Promise<string> {
+  return sha256(
+    `agent-access:owner-index:v1:${JSON.stringify([issuer, resource, ownerId])}`,
+  );
+}
+
+/** Integrity check for a public listing cursor. It is not a secret and never authorizes. */
+export async function grantCursorCheck(
+  ownerPartition: string,
+  position: number,
+): Promise<string> {
+  return (
+    await sha256(`agent-access:grant-cursor:v1:${ownerPartition}.${position}`)
+  ).slice(0, 22);
+}

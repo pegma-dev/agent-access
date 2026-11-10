@@ -51,9 +51,26 @@ export interface AgentAccessHttp {
   handle(request: Request): Promise<Response | null>;
 }
 
+export interface ProtectedResourceMultipartOptions {
+  /**
+   * Largest accepted multipart body in bytes, enforced on the declared
+   * Content-Length and on streamed bytes. Defaults to
+   * 1 MiB (1048576) and cannot exceed 16 MiB (16777216).
+   */
+  readonly maxBytes?: number;
+}
+
 export interface ProtectedResourceAuthenticatorOptions {
   readonly service: AgentAccessServicePort;
   readonly configuration: AgentAccessConfiguration;
+  /** Explicit opt-in for multipart/form-data resource requests; omitted rejects them. */
+  readonly multipart?: ProtectedResourceMultipartOptions;
+}
+
+/** Delegated access plus, for an accepted multipart request, its inspected form. */
+export interface ProtectedResourceAccess extends DelegatedAccess {
+  /** Present only for opted-in multipart requests; parsed from a body clone. */
+  readonly form?: FormData;
 }
 
 export interface ProtectedResourceAuthenticator {
@@ -61,8 +78,13 @@ export interface ProtectedResourceAuthenticator {
   authenticate(
     request: Request,
     requiredScopes?: readonly string[],
-  ): Promise<DelegatedAccess | Response>;
+  ): Promise<ProtectedResourceAccess | Response>;
 }
+
+/** Conservative default multipart body bound (1 MiB). */
+const DEFAULT_MULTIPART_MAX_BYTES = 1_048_576;
+/** Hard multipart body ceiling (16 MiB); larger uploads need a separate host transport. */
+const MAX_MULTIPART_BYTES = 16_777_216;
 
 const DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 const MAX_BODY_BYTES = 16_384;
@@ -646,16 +668,128 @@ function resourceError(
   });
 }
 
-/** Header-only bearer authentication. The host retains resource routing and body handling. */
+/** Field names that carry OAuth credentials in any body transport. */
+const CREDENTIAL_FIELDS = new Set([
+  "access_token",
+  "refresh_token",
+  "id_token",
+  "client_secret",
+  "client_assertion",
+  "client_assertion_type",
+  "device_code",
+  "code_verifier",
+]);
+/** Any issued credential shape, wherever it appears in a text field. */
+const ISSUED_CREDENTIAL = /pg[adrt]1\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}/;
+const MULTIPART = /^multipart\/form-data(?:\s*;|\s*$)/i;
+const BOUNDARY = /^[0-9A-Za-z'()+_,\-./:=? ]{0,69}[0-9A-Za-z'()+_,\-./:=?]$/;
+
+function multipartMaximum(
+  multipart: ProtectedResourceMultipartOptions | undefined,
+): number | undefined {
+  if (multipart === undefined) return undefined;
+  if (multipart === null || typeof multipart !== "object") invalidRequest();
+  const maximum = multipart.maxBytes ?? DEFAULT_MULTIPART_MAX_BYTES;
+  if (
+    !Number.isSafeInteger(maximum) ||
+    maximum < 1 ||
+    maximum > MAX_MULTIPART_BYTES
+  )
+    invalidRequest();
+  return maximum;
+}
+
+/** Header-only checks that run before the bearer is validated or any byte is read. */
+function assertMultipartHeaders(
+  request: Request,
+  contentType: string,
+  maximum: number,
+): void {
+  let boundaries = 0;
+  for (const parameter of contentType.split(";").slice(1)) {
+    const separator = parameter.indexOf("=");
+    if (separator < 1) invalidRequest();
+    const name = parameter.slice(0, separator).trim().toLowerCase();
+    if (name !== "boundary") continue;
+    boundaries += 1;
+    let value = parameter.slice(separator + 1).trim();
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"'))
+      value = value.slice(1, -1);
+    if (!BOUNDARY.test(value)) invalidRequest();
+  }
+  if (boundaries !== 1) invalidRequest();
+  const declared = request.headers.get("Content-Length");
+  if (declared !== null) {
+    if (!/^(?:0|[1-9][0-9]*)$/.test(declared)) invalidRequest();
+    // Reject a declared oversize body before reading or buffering any byte.
+    if (Number(declared) > maximum) invalidRequest(413);
+  }
+  if (request.body === null || request.bodyUsed) invalidRequest();
+}
+
+/**
+ * Parses a clone of the body through a byte counter, so the host's original
+ * request stays unread and an oversized stream is cancelled at the bound.
+ */
+async function multipartForm(
+  request: Request,
+  contentType: string,
+  maximum: number,
+): Promise<FormData> {
+  let copy: Request;
+  try {
+    copy = request.clone();
+  } catch {
+    return invalidRequest();
+  }
+  if (copy.body === null) invalidRequest();
+  let total = 0;
+  let exceeded = false;
+  const counted = copy.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        if (!(chunk instanceof Uint8Array)) {
+          controller.error(new OAuthError("invalid_request"));
+          return;
+        }
+        total += chunk.byteLength;
+        if (total > maximum) {
+          exceeded = true;
+          controller.error(new OAuthError("invalid_request", 413));
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    }),
+  );
+  let form: FormData;
+  try {
+    form = await new Response(counted, {
+      headers: { "Content-Type": contentType },
+    }).formData();
+  } catch {
+    return invalidRequest(exceeded ? 413 : 400);
+  }
+  if (exceeded) invalidRequest(413);
+  for (const [name, value] of form.entries()) {
+    if (CREDENTIAL_FIELDS.has(name.toLowerCase())) invalidRequest();
+    const text = typeof value === "string" ? value : value.name;
+    if (ISSUED_CREDENTIAL.test(text)) invalidRequest();
+  }
+  return form;
+}
+
+/** Header bearer authentication. The host retains resource routing and body handling. */
 export function createProtectedResourceAuthenticator(
   options: ProtectedResourceAuthenticatorOptions,
 ): ProtectedResourceAuthenticator {
   const configuration = normalizeConfiguration(options.configuration);
+  const multipartBytes = multipartMaximum(options.multipart);
   return Object.freeze({
     async authenticate(
       request: Request,
       requiredScopes: readonly string[] = [],
-    ): Promise<DelegatedAccess | Response> {
+    ): Promise<ProtectedResourceAccess | Response> {
       let selected: readonly string[] = [];
       try {
         if (
@@ -679,14 +813,18 @@ export function createProtectedResourceAuthenticator(
         const url = new URL(request.url);
         assertByteBound(url.search, MAX_BODY_BYTES);
         if (url.searchParams.has("access_token")) invalidRequest();
-        // Do not read/clone the host's body. Form transports must reject token fields themselves.
+        // Never read the host's body by default. Opted-in multipart reads only a clone.
         const contentType = request.headers.get("Content-Type") ?? "";
+        const multipart = MULTIPART.test(contentType);
         if (
-          /^(?:application\/x-www-form-urlencoded|multipart\/form-data)(?:\s*;|\s*$)/i.test(
+          /^application\/x-www-form-urlencoded(?:\s*;|\s*$)/i.test(
             contentType,
-          )
+          ) ||
+          (multipart && multipartBytes === undefined)
         )
           invalidRequest();
+        if (multipart && multipartBytes !== undefined)
+          assertMultipartHeaders(request, contentType, multipartBytes);
         const authorization = request.headers.get("Authorization");
         if (authorization === null)
           return resourceError(
@@ -701,11 +839,17 @@ export function createProtectedResourceAuthenticator(
         );
         const match = /^Bearer ([A-Za-z0-9\-._~+/]+=*)$/i.exec(authorization);
         if (match === null || match[1] === undefined) invalidRequest();
-        return await options.service.authenticate({
+        const delegated = await options.service.authenticate({
           token: match[1],
           resource: configuration.resource,
           requiredScopes: selected,
         });
+        // The body is inspected only after the bearer header is accepted.
+        if (!multipart || multipartBytes === undefined) return delegated;
+        return {
+          ...delegated,
+          form: await multipartForm(request, contentType, multipartBytes),
+        };
       } catch (error) {
         return resourceError(error, configuration, selected);
       }

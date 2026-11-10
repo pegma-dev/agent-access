@@ -61,19 +61,68 @@ attach permissive CORS headers to browser consent endpoints.
 
 ## Protected resources
 
-`createProtectedResourceAuthenticator({ service, configuration })` returns
-`{ authenticate(request, requiredScopes?) }`. Its Promise resolves to
-`DelegatedAccess` or an error `Response`. It accepts one `Authorization: Bearer`
+`createProtectedResourceAuthenticator({ service, configuration, multipart? })`
+returns `{ authenticate(request, requiredScopes?) }`. Its Promise resolves to
+`ProtectedResourceAccess` (a `DelegatedAccess`, plus `form` for an opted-in
+multipart request) or an error `Response`. It accepts one `Authorization: Bearer`
 credential, rejects query `access_token`, and emits a `WWW-Authenticate`
 challenge with `resource_metadata` on authentication errors. An insufficient
 scope returns HTTP 403 and the required scope in the challenge. Unavailable
 authority returns HTTP 503.
 
-The helper never consumes the host's resource body. It rejects form and
-multipart content types, so credentials cannot arrive simultaneously in form
-and header transports. Hosts requiring form resource operations must implement
-their own bounded check for forbidden body credentials around the service's
-`authenticate` method. The host still authorizes the actual operation using
+By default the helper never consumes the host's resource body. It rejects form
+and multipart content types, so credentials cannot arrive simultaneously in
+form and header transports. URL-encoded form resource operations remain
+unsupported; hosts requiring them must implement their own bounded check for
+forbidden body credentials around the service's `authenticate` method.
+
+### Opt-in multipart uploads
+
+File-upload endpoints can opt in per authenticator:
+
+```ts
+const uploads = createProtectedResourceAuthenticator({
+  service,
+  configuration,
+  multipart: { maxBytes: 4 * 1024 * 1024 }, // omit maxBytes for the 1 MiB default
+});
+const result = await uploads.authenticate(request, ["files.write"]);
+if (result instanceof Response) return result;
+const file = result.form?.get("file"); // already parsed and inspected
+```
+
+Only an authenticator created with `multipart` accepts `multipart/form-data`;
+every other authenticator keeps rejecting it. `maxBytes` defaults to
+1 MiB (1048576 bytes) and must be a positive integer no larger
+than 16 MiB (16777216 bytes); an invalid bound throws `OAuthError` at
+construction. Larger uploads need a separate host transport, such as a
+pre-authorized direct upload.
+
+The order is fixed. Header checks run first: exactly one valid RFC 2046
+`boundary` parameter, and a well-formed `Content-Length` no larger than the
+bound when declared. A declared oversize body returns HTTP 413 before any byte
+is read. The `Authorization: Bearer` header is then authenticated exactly as
+for other requests, so a missing or invalid bearer returns its 401 challenge
+without reading the body. Only after the bearer is accepted is the body parsed.
+
+Credentials still come only from the header. The body is read from
+`request.clone()` through a byte counter, so the host's original `Request`
+stays unread and an oversized or unbounded stream is cancelled at the bound
+with HTTP 413. The parsed form is returned as `result.form` so the host need
+not parse twice; the host may instead read its untouched original body. Budget
+memory for about twice `maxBytes` per in-flight upload: the tee retains the
+unread original while the clone is parsed. The authenticator rejects with HTTP
+400 `invalid_request` any part named `access_token`, `refresh_token`,
+`id_token`, `client_secret`, `client_assertion`, `client_assertion_type`,
+`device_code`, or `code_verifier` (case-insensitive), and any text value or
+filename containing an issued Agent Access credential. Query `access_token` is
+still rejected. File contents are not scanned. Missing, duplicate, or invalid
+boundaries, an empty body, and a malformed multipart body are HTTP 400
+`invalid_request`. Every rejection carries the usual `WWW-Authenticate`
+challenge and no submitted values. Non-multipart requests through an opted-in
+authenticator behave exactly as before and carry no `form`.
+
+The host still authorizes the actual operation using
 the returned restricted `access`; accepting a token alone does not authorize
 an operation. Resource transport CORS, routing, body limits, and host limiter
 remain host responsibilities.

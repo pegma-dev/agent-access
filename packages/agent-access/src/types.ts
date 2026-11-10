@@ -176,15 +176,49 @@ export interface RevokeTokenInput {
   readonly tokenTypeHint?: "access_token" | "refresh_token";
 }
 
+export type GrantStatus =
+  "pending" | "active" | "denied" | "revoked" | "expired";
+
 export interface GrantView {
   readonly grantId: string;
   readonly clientId: string;
   readonly ownerId: PrincipalId;
   readonly resource: string;
   readonly scopes: readonly ScopeDefinition[];
-  readonly status: "pending" | "active" | "denied" | "revoked" | "expired";
+  readonly status: GrantStatus;
   readonly createdAt: IsoTimestamp;
   readonly expiresAt: IsoTimestamp;
+}
+
+export interface ListGrantsInput {
+  /** Must equal the trusted browser session's principal; listing is owner-only. */
+  readonly ownerPrincipal: PrincipalId;
+  /** Opaque, owner-bound continuation returned as `nextCursor` by the previous page. */
+  readonly cursor?: string;
+  /** Index entries examined for this page: default 20, maximum 100. */
+  readonly limit?: number;
+  /** Optional status filter applied after reading; omitted returns every status. */
+  readonly statuses?: readonly GrantStatus[];
+}
+
+export interface GrantPage {
+  /** Newest indexed first. A page may hold fewer than `limit` grants. */
+  readonly grants: readonly GrantView[];
+  /** Null when no older index entries remain. */
+  readonly nextCursor: string | null;
+}
+
+export interface BackfillGrantIndexInput {
+  /** Storage-adapter scan continuation from the previous call's `nextCursor`. */
+  readonly cursor?: string;
+  /** Physical rows scanned this call: default 100, maximum 1000. */
+  readonly limit?: number;
+}
+
+export interface BackfillGrantIndexResult {
+  readonly scanned: number;
+  readonly indexed: number;
+  readonly nextCursor: string | null;
 }
 
 export interface AgentAccessServicePort {
@@ -219,4 +253,12 @@ export interface AgentAccessServicePort {
     grantId: string,
   ): Promise<GrantView>;
   revokeGrant(context: BrowserApprovalContext, grantId: string): Promise<void>;
+  listGrants(
+    context: BrowserApprovalContext,
+    input: ListGrantsInput,
+  ): Promise<GrantPage>;
+  /** Host maintenance: indexes approved grants stored before owner listing existed. */
+  backfillGrantIndex(
+    input?: BackfillGrantIndexInput,
+  ): Promise<BackfillGrantIndexResult>;
 }

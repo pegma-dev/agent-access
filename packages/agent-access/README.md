@@ -29,6 +29,21 @@ routes with `createAgentAccessHttp` and protect resource handlers with
 context for the actual operation. Keep browser approval and its CSRF/origin
 checks in the host.
 
+Hosts that render a connected-agents page list the signed-in owner's approved
+grants with `listGrants(browserContext, { ownerPrincipal, cursor, limit })`.
+Pages are owner-only, bounded (default 20, maximum 100), and continue with an
+owner-bound opaque cursor. Each item is the same safe `GrantView` that
+`getGrant` returns, including its current status, and can be revoked with
+`revokeGrant`. Grants approved before listing existed appear after the host
+runs the bounded, idempotent `backfillGrantIndex` maintenance call.
+
+File-upload endpoints may opt in to multipart bodies per authenticator with
+`createProtectedResourceAuthenticator({ service, configuration, multipart: { maxBytes } })`.
+The bearer still comes only from the `Authorization` header. The body is bounded
+before and during streaming, parsed from a clone so the original request stays
+readable, rejected when any part carries credential fields, and returned as
+`result.form`. Without the option, multipart bodies are rejected as before.
+
 Actual existing-login/Admin-consent integration and per-client acceptance remain
 open for each host. The fictional protocol example does not establish those
 results.
