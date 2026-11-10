@@ -22,14 +22,14 @@ test("the reviewed release package order and exact dependency pins are fixed", (
   );
   for (const specification of specifications) {
     assert.deepEqual(
-      releaseDependencies(specification.directory, "0.1.0"),
+      releaseDependencies(specification.directory, "0.2.0"),
       specification.dependencies,
     );
   }
-  assert.throws(() => releaseDependencies("unknown", "0.1.0"));
+  assert.throws(() => releaseDependencies("unknown", "0.2.0"));
   for (const version of [
-    "v0.1.0",
-    "0.1.0-rc.1",
+    "v0.2.0",
+    "0.2.0-rc.1",
     "01.1.0",
     "1.0",
     "1.0.0+build",
@@ -41,9 +41,9 @@ test("the reviewed release package order and exact dependency pins are fixed", (
 function verify(fixture, overrides = {}) {
   return verifyReleaseIdentity({
     root: fixture.root,
-    tag: "v0.1.0",
+    tag: "v0.2.0",
     expectedCommit: fixture.commit,
-    version: "0.1.0",
+    version: "0.2.0",
     ...overrides,
   });
 }
@@ -53,9 +53,9 @@ test("an approved SSH signed annotated tag at the exact clean main commit verifi
   const result = verify(fixture);
   assert.deepEqual(result, {
     repository: "pegma-dev/agent-access",
-    tag: "v0.1.0",
+    tag: "v0.2.0",
     commit: fixture.commit,
-    version: "0.1.0",
+    version: "0.2.0",
   });
   assert.ok(Object.isFrozen(result));
 });
@@ -63,8 +63,8 @@ test("an approved SSH signed annotated tag at the exact clean main commit verifi
 test("release identity rejects a wrong tag, version, or event commit", async (t) => {
   const fixture = await signedGitFixture(t);
   for (const overrides of [
-    { tag: "v0.2.0" },
-    { version: "0.1.0-rc.1" },
+    { tag: "v0.3.0" },
+    { version: "0.2.0-rc.1" },
     { expectedCommit: "0".repeat(40) },
     { expectedCommit: fixture.commit.toUpperCase() },
     { expectedCommit: "HEAD" },
@@ -75,15 +75,15 @@ test("release identity rejects a wrong tag, version, or event commit", async (t)
 
 test("a lightweight tag cannot satisfy the signed annotated release contract", async (t) => {
   const fixture = await signedGitFixture(t);
-  fixture.git("tag", "-d", "v0.1.0");
-  fixture.git("tag", "v0.1.0");
+  fixture.git("tag", "-d", "v0.2.0");
+  fixture.git("tag", "v0.2.0");
   assert.throws(() => verify(fixture), /annotated tag object/u);
 });
 
 test("an unsigned annotated tag cannot satisfy the release contract", async (t) => {
   const fixture = await signedGitFixture(t);
-  fixture.git("tag", "-d", "v0.1.0");
-  fixture.git("tag", "-a", "v0.1.0", "-m", "Unsigned fixture");
+  fixture.git("tag", "-d", "v0.2.0");
+  fixture.git("tag", "-a", "v0.2.0", "-m", "Unsigned fixture");
   assert.throws(() => verify(fixture), /signature/u);
 });
 
@@ -191,7 +191,7 @@ test("trusted global signer configuration remains available to verification", as
 
 test("a tag object changed after signing fails cryptographic verification", async (t) => {
   const fixture = await signedGitFixture(t);
-  const signed = fixture.git("cat-file", "tag", "refs/tags/v0.1.0");
+  const signed = fixture.git("cat-file", "tag", "refs/tags/v0.2.0");
   assert.ok(signed.includes("Synthetic signed release"));
   const changed = join(fixture.directory, "modified-tag-object");
   await writeFile(
@@ -199,7 +199,7 @@ test("a tag object changed after signing fails cryptographic verification", asyn
     `${signed.replace("Synthetic signed release", "Unreviewed tag message")}\n`,
   );
   const object = fixture.git("hash-object", "-t", "tag", "-w", changed);
-  fixture.git("update-ref", "refs/tags/v0.1.0", object);
+  fixture.git("update-ref", "refs/tags/v0.2.0", object);
   assert.throws(() => verify(fixture), /signature/u);
 });
 

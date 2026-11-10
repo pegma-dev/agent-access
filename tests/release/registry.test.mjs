@@ -307,7 +307,7 @@ test("matching integrity alone cannot authorize wrong metadata or a foreign tarb
     [
       "version",
       (value) => {
-        value.version = "0.2.0";
+        value.version = "0.3.0";
       },
     ],
     [
@@ -343,7 +343,7 @@ test("matching integrity alone cannot authorize wrong metadata or a foreign tarb
     [
       "foreign registry path",
       (value) => {
-        value.dist.tarball = `${registry}other/-/other-0.1.0.tgz`;
+        value.dist.tarball = `${registry}other/-/other-0.2.0.tgz`;
       },
     ],
     [
@@ -734,7 +734,7 @@ test("cryptographically verified provenance must still bind every prepared packa
       "wrong certificate tag",
       (audit) => {
         audit.verified[0].attestationBundles[0].bundle.verificationMaterial.certificate.rawBytes =
-          syntheticCertificate({ tag: "v0.2.0" });
+          syntheticCertificate({ tag: "v0.3.0" });
       },
     ],
     [
@@ -766,7 +766,7 @@ test("cryptographically verified provenance must still bind every prepared packa
       "wrong tag",
       (statement) => {
         statement.predicate.buildDefinition.externalParameters.workflow.ref =
-          "refs/tags/v0.2.0";
+          "refs/tags/v0.3.0";
       },
     ],
     [
@@ -1078,7 +1078,7 @@ test("consumer lock and provenance failures stop verification before package run
               );
               const installed =
                 packages[`node_modules/${prepared.artifacts[0].name}`];
-              if (problem === "wrong version") installed.version = "0.2.0";
+              if (problem === "wrong version") installed.version = "0.3.0";
               if (problem === "workspace link") installed.link = true;
               if (problem === "wrong integrity")
                 installed.integrity = "sha512-unreviewed";

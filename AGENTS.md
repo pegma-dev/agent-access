@@ -70,8 +70,8 @@ signatures, source-bound provenance, and a clean exact-version consumer with
 scripts disabled. Manual workflow dispatch prepares only.
 
 See [release operations](docs/RELEASING.md) and the
-[first-publication handoff](docs/BOOTSTRAP.md). The source is the `0.1.1`
-candidate for the first advertised trusted release. Maintainer 2FA bootstrap of
+[first-publication handoff](docs/BOOTSTRAP.md). The source is the `0.2.0`
+release candidate; `0.1.1` is published as npm `latest` with tag `v0.1.1`. Maintainer 2FA bootstrap of
 `0.1.0` is complete with exact registry bytes confirmed; it supplies no OIDC
 provenance. Verify actual npm distribution tags after bootstrap and investigate
 unexpected defaults; the publish tag argument alone does not prove their state.

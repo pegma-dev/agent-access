@@ -16,9 +16,9 @@ const temporaryPrefix = "pegma-agent-access-release-test-";
 
 export const identity = Object.freeze({
   repository: "pegma-dev/agent-access",
-  tag: "v0.1.0",
+  tag: "v0.2.0",
   commit: "a".repeat(40),
-  version: "0.1.0",
+  version: "0.2.0",
 });
 
 export const specifications = [
@@ -42,7 +42,7 @@ const certificates = new Map();
 
 export function syntheticCertificate({
   repository = "pegma-dev/agent-access",
-  tag = "v0.1.0",
+  tag = "v0.2.0",
   workflow = ".github/workflows/publish.yml",
   issuer = "https://token.actions.githubusercontent.com",
 } = {}) {
@@ -137,11 +137,11 @@ export async function preparedFixture(t) {
     // Manifest verification treats tarballs as opaque, previously reviewed
     // blobs. These fixtures exercise its byte boundary without executing npm.
     const bytes = Buffer.from(`synthetic artifact: ${specification.name}\n`);
-    const filename = `${specification.name.slice(1).replace("/", "-")}-0.1.0.tgz`;
+    const filename = `${specification.name.slice(1).replace("/", "-")}-0.2.0.tgz`;
     await writeFile(join(preparedDir, filename), bytes);
     artifacts.push({
       name: specification.name,
-      version: "0.1.0",
+      version: "0.2.0",
       filename,
       size: bytes.length,
       shasum: digest(bytes, "sha1"),
@@ -260,6 +260,6 @@ export async function signedGitFixture(t) {
     "https://github.com/pegma-dev/agent-access.git",
   );
   git("update-ref", "refs/remotes/origin/main", commit);
-  git("tag", "-s", "v0.1.0", "-m", "Synthetic signed release");
+  git("tag", "-s", "v0.2.0", "-m", "Synthetic signed release");
   return { directory, root, git, env, commit, allowedSigners };
 }
