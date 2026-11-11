@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 import { RELEASE_PACKAGES, RELEASE_REPOSITORY } from "./release-contract.mjs";
 import {
   validatePreparedManifest,
@@ -599,14 +600,15 @@ async function registryConsumer(verified, options, seams) {
 async function confirmRegistry(record, seams) {
   // npm accepts uploads before its publish-time malware scan makes them public.
   // Bound both elapsed time and physical lookups; never publish again while waiting.
-  const now = seams.now ?? Date.now;
+  const now = seams.now ?? (() => performance.now());
   const deadline = now() + 20 * 60_000;
   const sleep =
     seams.sleep ??
     ((milliseconds) =>
       new Promise((resolve_) => setTimeout(resolve_, milliseconds)));
   for (let attempt = 0; attempt < 41; attempt += 1) {
-    if (attempt > 0 && now() >= deadline) break;
+    // A sleep scheduled within the budget still gets its final bounded lookup,
+    // including when the timer resumes at or just after the deadline.
     if (
       (await registryRecord(record, seams.fetch ?? globalThis.fetch)) !== null
     )

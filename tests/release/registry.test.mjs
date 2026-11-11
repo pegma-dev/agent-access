@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { performance } from "node:perf_hooks";
 import test from "node:test";
 import {
   assertTrustedPublishingEnvironment,
@@ -606,6 +607,115 @@ test("publication polling is bounded even when the clock does not advance", asyn
   assert.equal(publishing.sleeps.length, 40);
 });
 
+test("publication checks visibility after the final scheduled sleep", async (t) => {
+  for (const [name, lookupLatency, timerOvershoot] of [
+    ["instant lookups", 0, 0],
+    ["lookup latency", 30_000, 0],
+    ["final timer overshoot", 0, 1],
+  ]) {
+    await t.test(name, async (t) => {
+      const prepared = await fixture(t);
+      const state = fakeRegistry(prepared, []);
+      const publishing = publisher(prepared, state);
+      const originalNow = publishing.seams.now;
+      const originalSleep = publishing.seams.sleep;
+      let lookupTime = 0;
+      let overshoot = 0;
+      const postUploadLookups = [];
+      publishing.seams.now = () => originalNow() + lookupTime + overshoot;
+      publishing.seams.sleep = async (milliseconds) => {
+        await originalSleep(milliseconds);
+        if (publishing.seams.now() === 20 * 60_000) overshoot += timerOvershoot;
+      };
+      state.metadata = () => {
+        if (
+          !publishing.calls.some(
+            ({ arguments_ }) => arguments_[1] === "publish",
+          )
+        )
+          return undefined;
+        postUploadLookups.push(publishing.seams.now());
+        lookupTime += lookupLatency;
+        return publishing.seams.now() < 19 * 60_000 + 45_000
+          ? jsonResponse({ error: "Not found" }, 404)
+          : undefined;
+      };
+      const result = await publishPreparedRelease(
+        prepared.options,
+        publishing.seams,
+      );
+      const polls = lookupLatency === 0 ? 41 : 21;
+      assert.deepEqual(
+        postUploadLookups.slice(0, -1),
+        Array.from(
+          { length: polls },
+          (_, index) =>
+            index * (30_000 + lookupLatency) +
+            (index === polls - 1 ? timerOvershoot : 0),
+        ),
+      );
+      // The extra lookup is the unchanged independent post-poll byte check.
+      assert.equal(postUploadLookups.length, polls + 1);
+      assert.equal(publishing.sleeps.length, polls - 1);
+      assert.equal(
+        publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+          .length,
+        1,
+      );
+      assert.equal(result.verified, true);
+      assert.deepEqual(result.skipped, []);
+      assert.deepEqual(
+        result.published,
+        prepared.artifacts.map(({ name }) => name),
+      );
+    });
+  }
+});
+
+test("production polling deadline ignores forward and backward wall-clock adjustments", async (t) => {
+  for (const direction of [1, -1]) {
+    await t.test(direction === 1 ? "forward" : "backward", async (t) => {
+      const prepared = await fixture(t);
+      const state = fakeRegistry(prepared, []);
+      const publishing = publisher(prepared, state);
+      const originalSleep = publishing.seams.sleep;
+      let elapsed = 0;
+      let wall = Date.now();
+      let lookups = 0;
+      delete publishing.seams.now;
+      t.mock.method(performance, "now", () => elapsed);
+      t.mock.method(Date, "now", () => wall);
+      publishing.seams.sleep = async (milliseconds) => {
+        await originalSleep(milliseconds);
+        elapsed += milliseconds;
+        wall += milliseconds + direction * 60 * 60_000;
+      };
+      state.metadata = () => {
+        if (
+          publishing.calls.some(({ arguments_ }) => arguments_[1] === "publish")
+        ) {
+          elapsed += 30_000;
+          wall += 30_000;
+          lookups += 1;
+        }
+        return jsonResponse({}, 404);
+      };
+      await assert.rejects(
+        publishPreparedRelease(prepared.options, publishing.seams),
+        /check npm scanning or review status/,
+      );
+      assert.equal(elapsed, 20 * 60_000 + 30_000);
+      assert.equal(lookups, 21);
+      assert.equal(publishing.sleeps.length, 20);
+      assert.equal(
+        publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+          .length,
+        1,
+      );
+    });
+  }
+});
+
 test("publication polling counts lookup time toward its deadline", async (t) => {
   const prepared = await fixture(t);
   const state = fakeRegistry(prepared, []);
@@ -627,8 +737,8 @@ test("publication polling counts lookup time toward its deadline", async (t) => 
     publishPreparedRelease(prepared.options, publishing.seams),
     /check npm scanning or review status/,
   );
-  assert.equal(publishing.seams.now(), 20 * 60_000);
-  assert.equal(lookups, 20);
+  assert.equal(publishing.seams.now(), 20 * 60_000 + 30_000);
+  assert.equal(lookups, 21);
   assert.equal(publishing.sleeps.length, 20);
 });
 

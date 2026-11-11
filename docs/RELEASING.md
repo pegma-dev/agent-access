@@ -217,16 +217,23 @@ and a separately reviewed release decision.
 npm accepts uploads before its
 [publish-time malware scan](https://github.blog/changelog/2026-07-28-npm-publish-time-malware-scanning-and-dual-use-metadata/)
 makes the version available. This normally takes about five minutes and can take
-15 minutes or longer. After one accepted upload, publication polls only exact
+15 minutes or longer; these are typical timings, not service guarantees.
+After one accepted upload, publication polls only exact
 version reads, at most 41 times, with up to 30 seconds between checks and a
-20-minute deadline (in-flight metadata and tarball verification can take up to
-60 additional seconds).
+20-minute monotonic elapsed-time budget. The final scheduled sleep is followed
+by one bounded lookup, whose metadata and tarball verification can take up to
+60 additional seconds.
 Unknown registry states and conflicting bytes still fail immediately. The
-30-minute job timeout remains the outer bound. An unavailable version at the
+30-minute job timeout remains the outer bound and can interrupt publication or
+byte verification; it does not guarantee enough time for every worst-case step.
+An unavailable version at the
 deadline is not proof that the upload failed: check npm scanning or review status
 and preserve the original artifact rather than uploading again blindly. Once
-the exact version is visible, run read-only `preflight` with the original
-artifact ID, independent manifest digest, tag, and commit. If it matches, rerun
+the exact version is visible, download the original immutable workflow artifact
+by its artifact ID into a fresh prepared directory. Run the read-only `preflight`
+command above with `--prepared-dir` pointing to those downloaded files and the
+original independent manifest digest, tag, and commit. The artifact ID selects
+the workflow download; it is not a `preflight` argument. If it matches, rerun
 only the failed jobs in the original Publish run; publication skips the matching
 existing version and the separate registry/provenance verification must pass.
 
