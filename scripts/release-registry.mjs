@@ -64,6 +64,15 @@ function tarballUrl(record) {
   return `${registry}${record.name}/-/${record.name.split("/")[1]}-${record.version}.tgz`;
 }
 
+function discardBody(body) {
+  try {
+    // Cleanup cannot replace a known status or hold the confirmation deadline.
+    void Promise.resolve(body?.cancel()).catch(() => {});
+  } catch {
+    // Preserve the verification result if cancellation throws synchronously.
+  }
+}
+
 async function responseBytes(response, maximum, confirmation = false) {
   const length = response.headers?.get("content-length");
   if (
@@ -71,7 +80,7 @@ async function responseBytes(response, maximum, confirmation = false) {
     length !== undefined &&
     (!/^\d+$/u.test(length) || Number(length) > maximum)
   ) {
-    await response.body?.cancel();
+    discardBody(response.body);
     fail("registry response exceeded its release verification limit");
   }
   const chunks = [];
@@ -96,11 +105,7 @@ async function responseBytes(response, maximum, confirmation = false) {
       chunks.push(Buffer.from(item.value));
     }
   } finally {
-    try {
-      await reader.cancel();
-    } catch {
-      // Preserve the verification/transport result if stream cleanup fails.
-    }
+    discardBody(reader);
     reader.releaseLock();
   }
   return Buffer.concat(chunks, size);
@@ -139,11 +144,7 @@ async function retryTransientConfirmation(response, confirmation) {
   }
   const retryAfterMs =
     delay > 0 ? Math.min(delay, confirmationBudgetMs + 1) : 0;
-  try {
-    await response.body?.cancel();
-  } catch {
-    // Cleanup cannot turn a known transient response into a successful check.
-  }
+  discardBody(response.body);
   throw new RegistryConfirmationRetry(retryAfterMs);
 }
 
@@ -158,11 +159,11 @@ async function registryRecord(record, fetch, confirmation = false) {
   await retryTransientConfirmation(response, confirmation);
   // Only this exact response establishes absence, regardless of caller mode.
   if (response.status === 404) {
-    await response.body?.cancel();
+    discardBody(response.body);
     return null;
   }
   if (response.status !== 200) {
-    await response.body?.cancel();
+    discardBody(response.body);
     fail("registry lookup failed; package availability is unknown");
   }
   let metadata;
@@ -195,7 +196,7 @@ async function registryRecord(record, fetch, confirmation = false) {
   const tarball = await request(metadata.dist.tarball, fetch, confirmation);
   await retryTransientConfirmation(tarball, confirmation);
   if (tarball.status !== 200) {
-    await tarball.body?.cancel();
+    discardBody(tarball.body);
     fail("registry tarball verification failed");
   }
   let bytes;

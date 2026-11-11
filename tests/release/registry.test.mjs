@@ -47,6 +47,20 @@ function jsonResponse(value, status = 200) {
   });
 }
 
+function unsettledCleanupResponse(status, cleanup, onCancel) {
+  return new Response(
+    new ReadableStream({
+      cancel() {
+        onCancel();
+        return cleanup === "rejecting"
+          ? Promise.reject(new Error("synthetic body cleanup failure"))
+          : new Promise(() => {});
+      },
+    }),
+    { status },
+  );
+}
+
 async function fixture(t) {
   const prepared = await preparedFixture(t);
   const written = await writePreparedManifest(prepared);
@@ -596,6 +610,149 @@ test("post-publication absence and transient failures share a bounded budget whi
         problem === 401 || problem === 403 ? 3 : 43,
       );
     });
+  }
+});
+
+test("accepted-upload 404 cleanup cannot override a later exact registry result", async (t) => {
+  for (const cleanup of ["rejecting", "never settling"]) {
+    await t.test(cleanup, { timeout: 5_000 }, async (t) => {
+      const prepared = await fixture(t);
+      const state = fakeRegistry(prepared, []);
+      const publishing = publisher(prepared, state);
+      let lookups = 0;
+      let cancellations = 0;
+      state.metadata = () => {
+        if (
+          !publishing.calls.some(
+            ({ arguments_ }) => arguments_[1] === "publish",
+          )
+        )
+          return undefined;
+        if (++lookups !== 1) return undefined;
+        return unsettledCleanupResponse(404, cleanup, () => {
+          cancellations += 1;
+        });
+      };
+      const result = await publishPreparedRelease(
+        prepared.options,
+        publishing.seams,
+      );
+      assert.equal(cancellations, 1);
+      assert.equal(result.verified, true);
+      assert.deepEqual(
+        result.published,
+        prepared.artifacts.map(({ name }) => name),
+      );
+      assert.deepEqual(result.skipped, []);
+      assert.deepEqual(publishing.sleeps, [30_000]);
+      assert.equal(publishing.seams.now(), 30_000);
+      assert.equal(lookups, 3);
+      assert.equal(
+        publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+          .length,
+        1,
+      );
+      assert.equal(
+        state.requests.filter(({ kind }) => kind === "tarball").length,
+        2,
+      );
+    });
+  }
+});
+
+test("unsettled 404 cleanup cannot extend the accepted-upload polling budget", async (t) => {
+  for (const cleanup of ["rejecting", "never settling"]) {
+    await t.test(cleanup, { timeout: 5_000 }, async (t) => {
+      const prepared = await fixture(t);
+      const state = fakeRegistry(prepared, []);
+      const publishing = publisher(prepared, state);
+      let cancellations = 0;
+      state.metadata = () => {
+        if (
+          !publishing.calls.some(
+            ({ arguments_ }) => arguments_[1] === "publish",
+          )
+        )
+          return undefined;
+        return unsettledCleanupResponse(404, cleanup, () => {
+          cancellations += 1;
+        });
+      };
+      await assert.rejects(
+        publishPreparedRelease(prepared.options, publishing.seams),
+        /could not be confirmed/,
+      );
+      assert.equal(cancellations, 41);
+      assert.deepEqual(publishing.sleeps, Array(40).fill(30_000));
+      assert.equal(publishing.seams.now(), 20 * 60_000);
+      assert.equal(
+        state.requests.filter(({ kind }) => kind === "metadata").length,
+        43,
+      );
+      assert.equal(
+        publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+          .length,
+        1,
+      );
+      assert.equal(
+        state.requests.filter(({ kind }) => kind === "tarball").length,
+        0,
+      );
+    });
+  }
+});
+
+test("404 cleanup cannot bypass later authentication or exact-byte refusal", async (t) => {
+  for (const cleanup of ["rejecting", "never settling"]) {
+    for (const problem of [401, 403, "byte conflict"]) {
+      await t.test(`${cleanup}/${problem}`, { timeout: 5_000 }, async (t) => {
+        const prepared = await fixture(t);
+        const state = fakeRegistry(prepared, []);
+        const publishing = publisher(prepared, state);
+        let lookups = 0;
+        let cancellations = 0;
+        const response = (status) =>
+          unsettledCleanupResponse(status, cleanup, () => {
+            cancellations += 1;
+          });
+        state.metadata = () => {
+          if (
+            !publishing.calls.some(
+              ({ arguments_ }) => arguments_[1] === "publish",
+            )
+          )
+            return undefined;
+          if (++lookups === 1) return response(404);
+          return typeof problem === "number" ? response(problem) : undefined;
+        };
+        if (problem === "byte conflict")
+          state.blob = (record) => {
+            const bytes = Buffer.from(prepared.blobs.get(record.name));
+            bytes[0] ^= 1;
+            return new Response(bytes);
+          };
+        await assert.rejects(
+          publishPreparedRelease(prepared.options, publishing.seams),
+          typeof problem === "number"
+            ? /package availability is unknown/
+            : /tarball conflicts with the prepared release/,
+        );
+        assert.equal(cancellations, typeof problem === "number" ? 2 : 1);
+        assert.equal(lookups, 2);
+        assert.deepEqual(publishing.sleeps, [30_000]);
+        assert.equal(publishing.seams.now(), 30_000);
+        assert.equal(
+          publishing.calls.filter(
+            ({ arguments_ }) => arguments_[1] === "publish",
+          ).length,
+          1,
+        );
+        assert.equal(
+          state.requests.filter(({ kind }) => kind === "metadata").length,
+          4,
+        );
+      });
+    }
   }
 });
 
