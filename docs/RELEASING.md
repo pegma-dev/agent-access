@@ -214,6 +214,37 @@ Never overwrite a version, rebuild from another checkout, move a tag, or treat
 an npm error as proof of absence. A conflict requires maintainer investigation
 and a separately reviewed release decision.
 
+npm accepts uploads before its
+[publish-time malware scan](https://github.blog/changelog/2026-07-28-npm-publish-time-malware-scanning-and-dual-use-metadata/)
+makes the version available. This normally takes about five minutes and can take
+15 minutes or longer; these are typical timings, not service guarantees.
+After one accepted upload, publication polls only exact
+version reads, at most 41 times, normally 30 seconds apart, with a
+20-minute monotonic elapsed-time budget. The final scheduled sleep is followed
+by one bounded lookup, whose metadata and tarball verification can take up to
+60 additional seconds.
+Only this post-upload confirmation can wait through transport failures or HTTP
+408, 429, 500, 502, 503 and 504. These remain unconfirmed states, never evidence
+of absence or permission for another upload. A valid `Retry-After` can lengthen
+the normal delay within the remaining budget; if it cannot fit, confirmation
+stops without polling early or extending the deadline. Authentication failures,
+malformed metadata and conflicting metadata or bytes still fail immediately.
+Ordinary preflight, recovery, the last pre-write lookup and the separate final
+byte verification remain strict. Success requires matching metadata and verified
+tarball bytes; exhausting the confirmation budget is not success. The
+30-minute job timeout remains the outer bound and can interrupt publication or
+byte verification; it does not guarantee enough time for every worst-case step.
+An unavailable version at the
+deadline is not proof that the upload failed: check npm scanning or review status
+and preserve the original artifact rather than uploading again blindly. Once
+the exact version is visible, download the original immutable workflow artifact
+by its artifact ID into a fresh prepared directory. Run the read-only `preflight`
+command above with `--prepared-dir` pointing to those downloaded files and the
+original independent manifest digest, tag, and commit. The artifact ID selects
+the workflow download; it is not a `preflight` argument. If it matches, rerun
+only the failed jobs in the original Publish run; publication skips the matching
+existing version and the separate registry/provenance verification must pass.
+
 ## Registry verification and availability
 
 After publication, the separate unprivileged job runs strict verification. The

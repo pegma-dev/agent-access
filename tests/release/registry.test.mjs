@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { performance } from "node:perf_hooks";
 import test from "node:test";
 import {
   assertTrustedPublishingEnvironment,
@@ -44,6 +45,20 @@ function jsonResponse(value, status = 200) {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function unsettledCleanupResponse(status, cleanup, onCancel) {
+  return new Response(
+    new ReadableStream({
+      cancel() {
+        onCancel();
+        return cleanup === "rejecting"
+          ? Promise.reject(new Error("synthetic body cleanup failure"))
+          : new Promise(() => {});
+      },
+    }),
+    { status },
+  );
 }
 
 async function fixture(t) {
@@ -139,11 +154,14 @@ function trustedEnvironment() {
 function publisher(fixture, state) {
   const calls = [];
   const sleeps = [];
+  let elapsed = 0;
   const seams = {
+    now: () => elapsed,
     env: trustedEnvironment(),
     fetch: state.fetch,
     sleep: async (milliseconds) => {
       sleeps.push(milliseconds);
+      elapsed += milliseconds;
     },
     run: async (command, arguments_, context) => {
       calls.push({ command, arguments_, context });
@@ -526,9 +544,35 @@ test("a matching version published concurrently is reverified and skipped immedi
   );
 });
 
-test("post-publication absence has a bounded retry budget and unknown states fail immediately", async (t) => {
-  for (const problem of ["404", "network"]) {
-    await t.test(problem, async (t) => {
+test("publication waits through npm scanning and verifies bytes without publishing twice", async (t) => {
+  const prepared = await fixture(t);
+  const state = fakeRegistry(prepared, []);
+  const publishing = publisher(prepared, state);
+  state.metadata = () =>
+    publishing.calls.some(({ arguments_ }) => arguments_[1] === "publish") &&
+    publishing.seams.now() < 16 * 60_000
+      ? jsonResponse({ error: "Not found" }, 404)
+      : undefined;
+  const result = await publishPreparedRelease(
+    prepared.options,
+    publishing.seams,
+  );
+  assert.deepEqual(
+    result.published,
+    prepared.artifacts.map(({ name }) => name),
+  );
+  assert.equal(publishing.sleeps.length, 32);
+  assert.equal(
+    publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+      .length,
+    1,
+  );
+  assert.ok(state.requests.some(({ kind }) => kind === "tarball"));
+});
+
+test("post-publication absence and transient failures share a bounded budget while authentication fails immediately", async (t) => {
+  for (const problem of ["404", "network", 401, 403, 429, 503]) {
+    await t.test(String(problem), async (t) => {
       const prepared = await fixture(t);
       const state = fakeRegistry(prepared, []);
       let published = false;
@@ -543,10 +587,14 @@ test("post-publication absence has a bounded retry budget and unknown states fai
         if (!published) return undefined;
         if (problem === "network")
           throw new Error("synthetic unknown network state");
+        if (typeof problem === "number") return jsonResponse({}, problem);
         return jsonResponse({ error: "Not found" }, 404);
       };
       await assert.rejects(
         publishPreparedRelease(prepared.options, publishing.seams),
+        problem === 401 || problem === 403
+          ? /package availability is unknown/
+          : /could not be confirmed/,
       );
       assert.equal(
         publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
@@ -555,10 +603,552 @@ test("post-publication absence has a bounded retry budget and unknown states fai
       );
       assert.deepEqual(
         publishing.sleeps,
-        problem === "404" ? [1000, 2000, 4000, 8000, 16000] : [],
+        problem === 401 || problem === 403 ? [] : Array(40).fill(30_000),
+      );
+      assert.equal(
+        state.requests.filter(({ kind }) => kind === "metadata").length,
+        problem === 401 || problem === 403 ? 3 : 43,
       );
     });
   }
+});
+
+test("accepted-upload 404 cleanup cannot override a later exact registry result", async (t) => {
+  for (const cleanup of ["rejecting", "never settling"]) {
+    await t.test(cleanup, { timeout: 5_000 }, async (t) => {
+      const prepared = await fixture(t);
+      const state = fakeRegistry(prepared, []);
+      const publishing = publisher(prepared, state);
+      let lookups = 0;
+      let cancellations = 0;
+      state.metadata = () => {
+        if (
+          !publishing.calls.some(
+            ({ arguments_ }) => arguments_[1] === "publish",
+          )
+        )
+          return undefined;
+        if (++lookups !== 1) return undefined;
+        return unsettledCleanupResponse(404, cleanup, () => {
+          cancellations += 1;
+        });
+      };
+      const result = await publishPreparedRelease(
+        prepared.options,
+        publishing.seams,
+      );
+      assert.equal(cancellations, 1);
+      assert.equal(result.verified, true);
+      assert.deepEqual(
+        result.published,
+        prepared.artifacts.map(({ name }) => name),
+      );
+      assert.deepEqual(result.skipped, []);
+      assert.deepEqual(publishing.sleeps, [30_000]);
+      assert.equal(publishing.seams.now(), 30_000);
+      assert.equal(lookups, 3);
+      assert.equal(
+        publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+          .length,
+        1,
+      );
+      assert.equal(
+        state.requests.filter(({ kind }) => kind === "tarball").length,
+        2,
+      );
+    });
+  }
+});
+
+test("unsettled 404 cleanup cannot extend the accepted-upload polling budget", async (t) => {
+  for (const cleanup of ["rejecting", "never settling"]) {
+    await t.test(cleanup, { timeout: 5_000 }, async (t) => {
+      const prepared = await fixture(t);
+      const state = fakeRegistry(prepared, []);
+      const publishing = publisher(prepared, state);
+      let cancellations = 0;
+      state.metadata = () => {
+        if (
+          !publishing.calls.some(
+            ({ arguments_ }) => arguments_[1] === "publish",
+          )
+        )
+          return undefined;
+        return unsettledCleanupResponse(404, cleanup, () => {
+          cancellations += 1;
+        });
+      };
+      await assert.rejects(
+        publishPreparedRelease(prepared.options, publishing.seams),
+        /could not be confirmed/,
+      );
+      assert.equal(cancellations, 41);
+      assert.deepEqual(publishing.sleeps, Array(40).fill(30_000));
+      assert.equal(publishing.seams.now(), 20 * 60_000);
+      assert.equal(
+        state.requests.filter(({ kind }) => kind === "metadata").length,
+        43,
+      );
+      assert.equal(
+        publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+          .length,
+        1,
+      );
+      assert.equal(
+        state.requests.filter(({ kind }) => kind === "tarball").length,
+        0,
+      );
+    });
+  }
+});
+
+test("404 cleanup cannot bypass later authentication or exact-byte refusal", async (t) => {
+  for (const cleanup of ["rejecting", "never settling"]) {
+    for (const problem of [401, 403, "byte conflict"]) {
+      await t.test(`${cleanup}/${problem}`, { timeout: 5_000 }, async (t) => {
+        const prepared = await fixture(t);
+        const state = fakeRegistry(prepared, []);
+        const publishing = publisher(prepared, state);
+        let lookups = 0;
+        let cancellations = 0;
+        const response = (status) =>
+          unsettledCleanupResponse(status, cleanup, () => {
+            cancellations += 1;
+          });
+        state.metadata = () => {
+          if (
+            !publishing.calls.some(
+              ({ arguments_ }) => arguments_[1] === "publish",
+            )
+          )
+            return undefined;
+          if (++lookups === 1) return response(404);
+          return typeof problem === "number" ? response(problem) : undefined;
+        };
+        if (problem === "byte conflict")
+          state.blob = (record) => {
+            const bytes = Buffer.from(prepared.blobs.get(record.name));
+            bytes[0] ^= 1;
+            return new Response(bytes);
+          };
+        await assert.rejects(
+          publishPreparedRelease(prepared.options, publishing.seams),
+          typeof problem === "number"
+            ? /package availability is unknown/
+            : /tarball conflicts with the prepared release/,
+        );
+        assert.equal(cancellations, typeof problem === "number" ? 2 : 1);
+        assert.equal(lookups, 2);
+        assert.deepEqual(publishing.sleeps, [30_000]);
+        assert.equal(publishing.seams.now(), 30_000);
+        assert.equal(
+          publishing.calls.filter(
+            ({ arguments_ }) => arguments_[1] === "publish",
+          ).length,
+          1,
+        );
+        assert.equal(
+          state.requests.filter(({ kind }) => kind === "metadata").length,
+          4,
+        );
+      });
+    }
+  }
+});
+
+test("accepted-upload confirmation survives a late transient registry failure without another upload", async (t) => {
+  for (const problem of ["network", 429, 503]) {
+    await t.test(String(problem), async (t) => {
+      const prepared = await fixture(t);
+      const state = fakeRegistry(prepared, []);
+      const publishing = publisher(prepared, state);
+      let transient = false;
+      state.metadata = () => {
+        if (
+          !publishing.calls.some(
+            ({ arguments_ }) => arguments_[1] === "publish",
+          )
+        )
+          return undefined;
+        if (publishing.seams.now() < 19 * 60_000) return jsonResponse({}, 404);
+        if (!transient) {
+          transient = true;
+          if (problem === "network")
+            throw new Error("synthetic transport failure");
+          return jsonResponse({}, problem);
+        }
+        return undefined;
+      };
+      const result = await publishPreparedRelease(
+        prepared.options,
+        publishing.seams,
+      );
+      assert.equal(transient, true);
+      assert.equal(result.verified, true);
+      assert.equal(publishing.seams.now(), 19 * 60_000 + 30_000);
+      assert.equal(publishing.sleeps.length, 39);
+      assert.equal(
+        publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+          .length,
+        1,
+      );
+      assert.equal(
+        state.requests.filter(({ kind }) => kind === "tarball").length,
+        2,
+      );
+    });
+  }
+});
+
+test("accepted-upload confirmation retries only designated transient responses and interrupted bodies", async (t) => {
+  const prepared = await fixture(t);
+  const state = fakeRegistry(prepared, []);
+  const publishing = publisher(prepared, state);
+  const failures = [408, 500, 502, 504, "metadata body"];
+  state.metadata = () => {
+    if (!publishing.calls.some(({ arguments_ }) => arguments_[1] === "publish"))
+      return undefined;
+    const problem = failures.shift();
+    if (problem === undefined) return undefined;
+    if (problem === "metadata body")
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new Error("synthetic transport failure"));
+          },
+        }),
+      );
+    return jsonResponse({}, problem);
+  };
+  const result = await publishPreparedRelease(
+    prepared.options,
+    publishing.seams,
+  );
+  assert.equal(result.verified, true);
+  assert.deepEqual(failures, []);
+  assert.deepEqual(publishing.sleeps, Array(5).fill(30_000));
+  assert.equal(
+    publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+      .length,
+    1,
+  );
+});
+
+test("accepted-upload tarball confirmation retries transport and transient status without accepting unverified bytes", async (t) => {
+  const prepared = await fixture(t);
+  const state = fakeRegistry(prepared, []);
+  const publishing = publisher(prepared, state);
+  const failures = ["network", 429, 503, "body"];
+  state.blob = () => {
+    const problem = failures.shift();
+    if (problem === undefined) return undefined;
+    if (problem === "network") throw new Error("synthetic transport failure");
+    if (problem === "body")
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new Error("synthetic transport failure"));
+          },
+        }),
+      );
+    return new Response(null, { status: problem });
+  };
+  const result = await publishPreparedRelease(
+    prepared.options,
+    publishing.seams,
+  );
+  assert.equal(result.verified, true);
+  assert.deepEqual(failures, []);
+  assert.deepEqual(publishing.sleeps, Array(4).fill(30_000));
+  assert.equal(
+    publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+      .length,
+    1,
+  );
+  assert.equal(
+    state.requests.filter(({ kind }) => kind === "tarball").length,
+    6,
+  );
+});
+
+test("accepted-upload confirmation honors bounded Retry-After without extending its deadline", async (t) => {
+  for (const [name, headers, expectedDelay] of [
+    ["seconds", { "retry-after": "90" }, 90_000],
+    [
+      "HTTP date",
+      {
+        date: "Wed, 11 Nov 2026 00:00:00 GMT",
+        "retry-after": "Wed, 11 Nov 2026 00:01:30 GMT",
+      },
+      90_000,
+    ],
+    ["shorter than cadence", { "retry-after": "5" }, 30_000],
+    ["invalid", { "retry-after": "invalid" }, 30_000],
+    ["beyond budget", { "retry-after": "1201" }, null],
+    ["overflow", { "retry-after": "9".repeat(400) }, null],
+  ]) {
+    await t.test(name, async (t) => {
+      const prepared = await fixture(t);
+      const state = fakeRegistry(prepared, []);
+      const publishing = publisher(prepared, state);
+      let transient = false;
+      state.metadata = () => {
+        if (
+          !publishing.calls.some(
+            ({ arguments_ }) => arguments_[1] === "publish",
+          ) ||
+          transient
+        )
+          return undefined;
+        transient = true;
+        return new Response(null, { status: 429, headers });
+      };
+      if (expectedDelay === null) {
+        await assert.rejects(
+          publishPreparedRelease(prepared.options, publishing.seams),
+          /could not be confirmed/,
+        );
+        assert.deepEqual(publishing.sleeps, []);
+      } else {
+        const result = await publishPreparedRelease(
+          prepared.options,
+          publishing.seams,
+        );
+        assert.equal(result.verified, true);
+        assert.deepEqual(publishing.sleeps, [expectedDelay]);
+        assert.equal(publishing.seams.now(), expectedDelay);
+      }
+      assert.equal(
+        publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+          .length,
+        1,
+      );
+    });
+  }
+});
+
+test("accepted-upload confirmation still rejects authentication, malformed metadata and byte conflicts immediately", async (t) => {
+  for (const problem of [
+    401,
+    403,
+    "malformed",
+    "dependency",
+    "tarball bytes",
+  ]) {
+    await t.test(String(problem), async (t) => {
+      const prepared = await fixture(t);
+      const state = fakeRegistry(prepared, []);
+      const publishing = publisher(prepared, state);
+      state.metadata = (record) => {
+        if (
+          !publishing.calls.some(
+            ({ arguments_ }) => arguments_[1] === "publish",
+          )
+        )
+          return undefined;
+        if (typeof problem === "number") return jsonResponse({}, problem);
+        if (problem === "malformed") return new Response("not JSON");
+        if (problem === "dependency") {
+          const value = metadata(record);
+          value.dependencies.extra = "1.0.0";
+          return jsonResponse(value);
+        }
+        return undefined;
+      };
+      if (problem === "tarball bytes")
+        state.blob = (record) => {
+          const bytes = Buffer.from(prepared.blobs.get(record.name));
+          bytes[0] ^= 1;
+          return new Response(bytes);
+        };
+      await assert.rejects(
+        publishPreparedRelease(prepared.options, publishing.seams),
+      );
+      assert.deepEqual(publishing.sleeps, []);
+      assert.equal(
+        publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+          .length,
+        1,
+      );
+    });
+  }
+});
+
+test("the last pre-write lookup remains strict before any upload", async (t) => {
+  for (const problem of [401, 429, 503, "network"]) {
+    await t.test(String(problem), async (t) => {
+      const prepared = await fixture(t);
+      const state = fakeRegistry(prepared, []);
+      const publishing = publisher(prepared, state);
+      let lookups = 0;
+      state.metadata = () => {
+        if (++lookups === 1) return undefined;
+        if (problem === "network")
+          throw new Error("synthetic transport failure");
+        return jsonResponse({}, problem);
+      };
+      await assert.rejects(
+        publishPreparedRelease(prepared.options, publishing.seams),
+      );
+      assert.equal(lookups, 2);
+      assert.deepEqual(publishing.sleeps, []);
+      assert.equal(
+        publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+          .length,
+        0,
+      );
+    });
+  }
+});
+
+test("publication polling is bounded even when the clock does not advance", async (t) => {
+  const prepared = await fixture(t);
+  const state = fakeRegistry(prepared, []);
+  const publishing = publisher(prepared, state);
+  publishing.seams.now = () => 0;
+  state.metadata = () => jsonResponse({}, 404);
+  await assert.rejects(
+    publishPreparedRelease(prepared.options, publishing.seams),
+    /check npm scanning or review status/,
+  );
+  // Two pre-upload lookups, then at most 41 post-upload lookups.
+  assert.equal(state.requests.length, 43);
+  assert.equal(publishing.sleeps.length, 40);
+});
+
+test("publication checks visibility after the final scheduled sleep", async (t) => {
+  for (const [name, lookupLatency, timerOvershoot] of [
+    ["instant lookups", 0, 0],
+    ["lookup latency", 30_000, 0],
+    ["final timer overshoot", 0, 1],
+  ]) {
+    await t.test(name, async (t) => {
+      const prepared = await fixture(t);
+      const state = fakeRegistry(prepared, []);
+      const publishing = publisher(prepared, state);
+      const originalNow = publishing.seams.now;
+      const originalSleep = publishing.seams.sleep;
+      let lookupTime = 0;
+      let overshoot = 0;
+      const postUploadLookups = [];
+      publishing.seams.now = () => originalNow() + lookupTime + overshoot;
+      publishing.seams.sleep = async (milliseconds) => {
+        await originalSleep(milliseconds);
+        if (publishing.seams.now() === 20 * 60_000) overshoot += timerOvershoot;
+      };
+      state.metadata = () => {
+        if (
+          !publishing.calls.some(
+            ({ arguments_ }) => arguments_[1] === "publish",
+          )
+        )
+          return undefined;
+        postUploadLookups.push(publishing.seams.now());
+        lookupTime += lookupLatency;
+        return publishing.seams.now() < 19 * 60_000 + 45_000
+          ? jsonResponse({ error: "Not found" }, 404)
+          : undefined;
+      };
+      const result = await publishPreparedRelease(
+        prepared.options,
+        publishing.seams,
+      );
+      const polls = lookupLatency === 0 ? 41 : 21;
+      assert.deepEqual(
+        postUploadLookups.slice(0, -1),
+        Array.from(
+          { length: polls },
+          (_, index) =>
+            index * (30_000 + lookupLatency) +
+            (index === polls - 1 ? timerOvershoot : 0),
+        ),
+      );
+      // The extra lookup is the unchanged independent post-poll byte check.
+      assert.equal(postUploadLookups.length, polls + 1);
+      assert.equal(publishing.sleeps.length, polls - 1);
+      assert.equal(
+        publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+          .length,
+        1,
+      );
+      assert.equal(result.verified, true);
+      assert.deepEqual(result.skipped, []);
+      assert.deepEqual(
+        result.published,
+        prepared.artifacts.map(({ name }) => name),
+      );
+    });
+  }
+});
+
+test("production polling deadline ignores forward and backward wall-clock adjustments", async (t) => {
+  for (const direction of [1, -1]) {
+    await t.test(direction === 1 ? "forward" : "backward", async (t) => {
+      const prepared = await fixture(t);
+      const state = fakeRegistry(prepared, []);
+      const publishing = publisher(prepared, state);
+      const originalSleep = publishing.seams.sleep;
+      let elapsed = 0;
+      let wall = Date.now();
+      let lookups = 0;
+      delete publishing.seams.now;
+      t.mock.method(performance, "now", () => elapsed);
+      t.mock.method(Date, "now", () => wall);
+      publishing.seams.sleep = async (milliseconds) => {
+        await originalSleep(milliseconds);
+        elapsed += milliseconds;
+        wall += milliseconds + direction * 60 * 60_000;
+      };
+      state.metadata = () => {
+        if (
+          publishing.calls.some(({ arguments_ }) => arguments_[1] === "publish")
+        ) {
+          elapsed += 30_000;
+          wall += 30_000;
+          lookups += 1;
+        }
+        return jsonResponse({}, 404);
+      };
+      await assert.rejects(
+        publishPreparedRelease(prepared.options, publishing.seams),
+        /check npm scanning or review status/,
+      );
+      assert.equal(elapsed, 20 * 60_000 + 30_000);
+      assert.equal(lookups, 21);
+      assert.equal(publishing.sleeps.length, 20);
+      assert.equal(
+        publishing.calls.filter(({ arguments_ }) => arguments_[1] === "publish")
+          .length,
+        1,
+      );
+    });
+  }
+});
+
+test("publication polling counts lookup time toward its deadline", async (t) => {
+  const prepared = await fixture(t);
+  const state = fakeRegistry(prepared, []);
+  const publishing = publisher(prepared, state);
+  const originalNow = publishing.seams.now;
+  let lookupTime = 0;
+  let lookups = 0;
+  publishing.seams.now = () => originalNow() + lookupTime;
+  state.metadata = () => {
+    if (
+      publishing.calls.some(({ arguments_ }) => arguments_[1] === "publish")
+    ) {
+      lookupTime += 30_000;
+      lookups += 1;
+    }
+    return jsonResponse({}, 404);
+  };
+  await assert.rejects(
+    publishPreparedRelease(prepared.options, publishing.seams),
+    /check npm scanning or review status/,
+  );
+  assert.equal(publishing.seams.now(), 20 * 60_000 + 30_000);
+  assert.equal(lookups, 21);
+  assert.equal(publishing.sleeps.length, 20);
 });
 
 test("privileged publication requires the exact hosted release workflow identity and rejects inherited npm authority", () => {

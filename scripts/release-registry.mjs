@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 import { RELEASE_PACKAGES, RELEASE_REPOSITORY } from "./release-contract.mjs";
 import {
   validatePreparedManifest,
@@ -22,6 +23,14 @@ export const RELEASE_WORKFLOW = ".github/workflows/publish.yml";
 const registry = "https://registry.npmjs.org/";
 const provenanceType = "https://slsa.dev/provenance/v1";
 const temporaryPrefix = "agent-access-registry-";
+const confirmationBudgetMs = 20 * 60_000;
+
+class RegistryConfirmationRetry extends Error {
+  constructor(retryAfterMs = 0) {
+    super("accepted upload registry confirmation is temporarily unavailable");
+    this.retryAfterMs = retryAfterMs;
+  }
+}
 
 function fail(message) {
   // Never surface native command output, registry response bodies, or credentials.
@@ -55,31 +64,54 @@ function tarballUrl(record) {
   return `${registry}${record.name}/-/${record.name.split("/")[1]}-${record.version}.tgz`;
 }
 
-async function responseBytes(response, maximum) {
+function discardBody(body) {
+  try {
+    // Cleanup cannot replace a known status or hold the confirmation deadline.
+    void Promise.resolve(body?.cancel()).catch(() => {});
+  } catch {
+    // Preserve the verification result if cancellation throws synchronously.
+  }
+}
+
+async function responseBytes(response, maximum, confirmation = false) {
   const length = response.headers?.get("content-length");
   if (
     length !== null &&
     length !== undefined &&
     (!/^\d+$/u.test(length) || Number(length) > maximum)
   ) {
-    await response.body?.cancel();
+    discardBody(response.body);
     fail("registry response exceeded its release verification limit");
   }
   const chunks = [];
   let size = 0;
   if (response.body === null || response.body === undefined)
     return Buffer.alloc(0);
-  for await (const chunk of response.body) {
-    size += chunk.length;
-    if (size > maximum) {
-      fail("registry response exceeded its release verification limit");
+  const reader = response.body.getReader();
+  try {
+    for (;;) {
+      let item;
+      try {
+        item = await reader.read();
+      } catch (error) {
+        if (confirmation) throw new RegistryConfirmationRetry();
+        throw error;
+      }
+      if (item.done) break;
+      size += item.value.length;
+      if (size > maximum) {
+        fail("registry response exceeded its release verification limit");
+      }
+      chunks.push(Buffer.from(item.value));
     }
-    chunks.push(Buffer.from(chunk));
+  } finally {
+    discardBody(reader);
+    reader.releaseLock();
   }
   return Buffer.concat(chunks, size);
 }
 
-async function request(url, fetch) {
+async function request(url, fetch, confirmation = false) {
   try {
     return await fetch(url, {
       redirect: "error",
@@ -87,31 +119,62 @@ async function request(url, fetch) {
       headers: { accept: "application/json" },
     });
   } catch {
+    if (confirmation) throw new RegistryConfirmationRetry();
     fail("registry lookup failed; package availability is unknown");
   }
 }
 
-async function registryRecord(record, fetch) {
+async function retryTransientConfirmation(response, confirmation) {
+  if (
+    !confirmation ||
+    ![408, 429, 500, 502, 503, 504].includes(response.status)
+  )
+    return;
+  const value = response.headers?.get("retry-after");
+  let delay = 0;
+  if (value !== null && value !== undefined) {
+    if (/^\d+$/u.test(value)) {
+      delay = Number(value) * 1000;
+    } else {
+      const serverTime = Date.parse(response.headers?.get("date") ?? "");
+      delay =
+        Date.parse(value) -
+        (Number.isFinite(serverTime) ? serverTime : Date.now());
+    }
+  }
+  const retryAfterMs =
+    delay > 0 ? Math.min(delay, confirmationBudgetMs + 1) : 0;
+  discardBody(response.body);
+  throw new RegistryConfirmationRetry(retryAfterMs);
+}
+
+async function registryRecord(record, fetch, confirmation = false) {
   const response = await request(
     `${registry}${encodeURIComponent(record.name)}/${record.version}`,
     fetch,
+    confirmation,
   );
-  // Authentication errors, throttling, server errors, redirects, and malformed
-  // responses are unknown states. Only this exact response establishes absence.
+  // Only the accepted-upload confirmation caller may wait through transient
+  // unknown states. Ordinary preflight and pre-write checks remain strict.
+  await retryTransientConfirmation(response, confirmation);
+  // Only this exact response establishes absence, regardless of caller mode.
   if (response.status === 404) {
-    await response.body?.cancel();
+    discardBody(response.body);
     return null;
   }
   if (response.status !== 200) {
-    await response.body?.cancel();
+    discardBody(response.body);
     fail("registry lookup failed; package availability is unknown");
   }
   let metadata;
   try {
     metadata = JSON.parse(
-      (await responseBytes(response, 2 * 1024 * 1024)).toString("utf8"),
+      (await responseBytes(response, 2 * 1024 * 1024, confirmation)).toString(
+        "utf8",
+      ),
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof RegistryConfirmationRetry) throw error;
     fail("registry package metadata verification failed");
   }
   if (
@@ -130,15 +193,17 @@ async function registryRecord(record, fetch) {
   ) {
     fail("registry version conflicts with the prepared release");
   }
-  const tarball = await request(metadata.dist.tarball, fetch);
+  const tarball = await request(metadata.dist.tarball, fetch, confirmation);
+  await retryTransientConfirmation(tarball, confirmation);
   if (tarball.status !== 200) {
-    await tarball.body?.cancel();
+    discardBody(tarball.body);
     fail("registry tarball verification failed");
   }
   let bytes;
   try {
-    bytes = await responseBytes(tarball, record.size);
-  } catch {
+    bytes = await responseBytes(tarball, record.size, confirmation);
+  } catch (error) {
+    if (error instanceof RegistryConfirmationRetry) throw error;
     fail("registry tarball verification failed");
   }
   if (
@@ -597,18 +662,40 @@ async function registryConsumer(verified, options, seams) {
 }
 
 async function confirmRegistry(record, seams) {
+  // npm accepts uploads before its publish-time malware scan makes them public.
+  // Bound both elapsed time and physical lookups; never publish again while waiting.
+  const now = seams.now ?? (() => performance.now());
+  const deadline = now() + confirmationBudgetMs;
   const sleep =
     seams.sleep ??
     ((milliseconds) =>
       new Promise((resolve_) => setTimeout(resolve_, milliseconds)));
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    if (
-      (await registryRecord(record, seams.fetch ?? globalThis.fetch)) !== null
-    )
-      return;
-    if (attempt < 5) await sleep(2 ** attempt * 1000);
+  for (let attempt = 0; attempt < 41; attempt += 1) {
+    // A sleep scheduled within the budget still gets its final bounded lookup,
+    // including when the timer resumes at or just after the deadline.
+    let retryAfterMs = 0;
+    try {
+      if (
+        (await registryRecord(
+          record,
+          seams.fetch ?? globalThis.fetch,
+          true,
+        )) !== null
+      )
+        return;
+    } catch (error) {
+      if (!(error instanceof RegistryConfirmationRetry)) throw error;
+      retryAfterMs = error.retryAfterMs;
+    }
+    const remaining = deadline - now();
+    if (attempt === 40 || remaining <= 0) break;
+    // Never extend the deadline or retry before a server's requested delay.
+    if (retryAfterMs > remaining) break;
+    await sleep(Math.min(Math.max(30_000, retryAfterMs), remaining));
   }
-  fail("published registry version was not visible after bounded verification");
+  fail(
+    "npm accepted the upload but the exact registry version could not be confirmed; preserve the artifact and check npm scanning or review status before retrying",
+  );
 }
 
 async function verifyPublishedBytes(verified, seams) {
