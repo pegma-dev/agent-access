@@ -219,11 +219,19 @@ npm accepts uploads before its
 makes the version available. This normally takes about five minutes and can take
 15 minutes or longer; these are typical timings, not service guarantees.
 After one accepted upload, publication polls only exact
-version reads, at most 41 times, with up to 30 seconds between checks and a
+version reads, at most 41 times, normally 30 seconds apart, with a
 20-minute monotonic elapsed-time budget. The final scheduled sleep is followed
 by one bounded lookup, whose metadata and tarball verification can take up to
 60 additional seconds.
-Unknown registry states and conflicting bytes still fail immediately. The
+Only this post-upload confirmation can wait through transport failures or HTTP
+408, 429, 500, 502, 503 and 504. These remain unconfirmed states, never evidence
+of absence or permission for another upload. A valid `Retry-After` can lengthen
+the normal delay within the remaining budget; if it cannot fit, confirmation
+stops without polling early or extending the deadline. Authentication failures,
+malformed metadata and conflicting metadata or bytes still fail immediately.
+Ordinary preflight, recovery, the last pre-write lookup and the separate final
+byte verification remain strict. Success requires matching metadata and verified
+tarball bytes; exhausting the confirmation budget is not success. The
 30-minute job timeout remains the outer bound and can interrupt publication or
 byte verification; it does not guarantee enough time for every worst-case step.
 An unavailable version at the
